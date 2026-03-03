@@ -1,0 +1,332 @@
+---
+title: 'Command Reference'
+description: 'Complete reference for all JackettSearchBot commands'
+---
+
+## Overview
+
+JackettSearchBot provides a comprehensive set of commands for searching releases, checking service availability, and managing access control. All commands are accessed through the Telegram bot interface.
+
+<Info>
+Commands are only available to authorized users. See the [Authorization](/usage/authorization) page for details on access control.
+</Info>
+
+## Basic Commands
+
+### /start
+
+Verifies that the bot is running and that you have access.
+
+**Usage:**
+```
+/start
+```
+
+**Response:**
+- If authorized: `STATUS: BOT STARTED`
+- If not authorized: `ERROR: NOT AUTHORIZED`
+
+**Source:** `jackett_bot/handlers/commands.py:48`
+
+---
+
+### /help
+
+Displays a list of all available commands and their usage.
+
+**Usage:**
+```
+/help
+```
+
+**Response:**
+Shows a formatted list of all bot commands with descriptions, including command aliases.
+
+**Source:** `jackett_bot/handlers/commands.py:57`
+
+---
+
+## Search Commands
+
+### /release
+
+Searches for releases using Jackett and displays results with pagination.
+
+**Usage:**
+```
+/release <query>
+/release <query> -gp
+```
+
+**Parameters:**
+- `<query>` - Search term or IMDb ID (e.g., "Movie Name" or "tt1234567")
+- `-gp` - Optional flag to filter only Golden Popcorn releases
+
+**Examples:**
+
+<Tabs>
+  <Tab title="Text Search">
+    ```
+    /release The Matrix
+    ```
+    Searches for releases matching "The Matrix"
+  </Tab>
+  <Tab title="IMDb ID">
+    ```
+    /release tt0133093
+    ```
+    Searches using IMDb ID (automatically detected)
+  </Tab>
+  <Tab title="Golden Popcorn">
+    ```
+    /release The Matrix -gp
+    ```
+    Searches only for Golden Popcorn releases
+  </Tab>
+</Tabs>
+
+**Response Format:**
+```
+SEARCH RESULTS
+Query: <your query>
+Page: 1/5 | Total: 47
+
+Title: <release title>
+Age: <time since upload>
+Size: <file size>
+
+Title: <release title>
+Age: <time since upload>
+Size: <file size>
+...
+```
+
+**Features:**
+- **Pagination:** Navigate through results using Prev/Next buttons
+- **Session-based:** Each search creates a unique session (expires after 1 hour)
+- **Auto-redaction:** Results are automatically redacted after a configured timeout (default: 300 seconds)
+- **IMDb Support:** Automatically detects and uses IMDb IDs starting with "tt"
+
+<Note>
+Pagination buttons only appear when there are multiple pages of results. Page size is configured via the `MAX_RESULTS` environment variable (default: 10).
+</Note>
+
+**Aliases:**
+- `/r` - Short alias for `/release`
+- `/relase` - Common typo alias for `/release`
+
+**Source:** `jackett_bot/handlers/commands.py:76`
+
+---
+
+### /r
+
+Short alias for `/release`. See `/release` for full documentation.
+
+**Usage:**
+```
+/r <query>
+/r <query> -gp
+```
+
+**Source:** `jackett_bot/app.py:65`
+
+---
+
+## Service Commands
+
+### /check
+
+Checks the availability of PassThePopcorn (PTP) service.
+
+**Usage:**
+```
+/check
+```
+
+**Response:**
+- If available: `PTP STATUS: AVAILABLE`
+- If unavailable: `PTP STATUS: UNAVAILABLE`
+
+**Technical Details:**
+- Timeout: 5 seconds
+- Checks: `https://passthepopcorn.me`
+- Requires authorization
+
+**Source:** `jackett_bot/handlers/commands.py:176`
+
+---
+
+## Owner Commands
+
+<Warning>
+These commands are restricted to the bot owner (configured via `OWNER_ID` in config).
+</Warning>
+
+### /auth
+
+Temporarily authorizes a user or chat to use the bot.
+
+**Usage:**
+```
+/auth <id>
+/auth (reply to a message)
+/auth (in a chat without parameters)
+```
+
+**Parameters:**
+- `<id>` - Explicit user ID or chat ID to authorize
+- If replying to a message: authorizes the user who sent that message
+- If no parameters: authorizes the current chat
+
+**Examples:**
+
+<Tabs>
+  <Tab title="Explicit ID">
+    ```
+    /auth 123456789
+    ```
+    Authorizes user/chat ID 123456789
+  </Tab>
+  <Tab title="Reply">
+    Reply to any user's message and send:
+    ```
+    /auth
+    ```
+    Authorizes that user
+  </Tab>
+  <Tab title="Current Chat">
+    In any chat, send:
+    ```
+    /auth
+    ```
+    Authorizes the current chat
+  </Tab>
+</Tabs>
+
+**Response:**
+- Success: `AUTHORIZED: <id>`
+- Already authorized from config: Shows source as `CONFIG`
+
+<Info>
+Temporary authorizations are stored in memory and will be cleared when the bot restarts. For permanent authorization, add IDs to `AUTHORIZED_CHAT_IDS` in the config.
+</Info>
+
+**Source:** `jackett_bot/handlers/commands.py:189`
+
+---
+
+### /unauth
+
+Removes temporary authorization from a user or chat.
+
+**Usage:**
+```
+/unauth <id>
+/unauth (reply to a message)
+/unauth (in a chat without parameters)
+```
+
+**Parameters:**
+Same as `/auth` - can use explicit ID, reply, or current chat.
+
+**Restrictions:**
+- Cannot remove the owner's authorization
+- Cannot remove IDs configured in `AUTHORIZED_CHAT_IDS` (must remove from config and restart)
+
+**Response:**
+- Success: `UNAUTHORIZED: <id>`
+- Not temporarily authorized: `ERROR: ID NOT TEMP AUTHORIZED: <id>`
+- Config-based authorization: Shows error with instructions to remove from config
+
+**Aliases:**
+- `/deauth` - Alias for `/unauth`
+
+**Source:** `jackett_bot/handlers/commands.py:214`
+
+---
+
+### /unauthall
+
+Clears all temporary authorizations at once.
+
+**Usage:**
+```
+/unauthall
+```
+
+**Response:**
+`TEMP IDS REMOVED: <count>`
+
+<Warning>
+This command only removes temporary authorizations. IDs configured in `AUTHORIZED_CHAT_IDS` and the owner ID remain authorized.
+</Warning>
+
+**Aliases:**
+- `/deauthall` - Alias for `/unauthall`
+
+**Source:** `jackett_bot/handlers/commands.py:246`
+
+---
+
+## Command Aliases Summary
+
+<Accordion title="View All Aliases">
+
+| Primary Command | Aliases | Description |
+|----------------|---------|-------------|
+| `/release` | `/r`, `/relase` | Search for releases |
+| `/unauth` | `/deauth` | Remove temporary authorization |
+| `/unauthall` | `/deauthall` | Clear all temporary authorizations |
+
+**Source:** `jackett_bot/app.py:56-88`
+
+</Accordion>
+
+---
+
+## Error Handling
+
+All commands implement comprehensive error handling:
+
+### Authorization Errors
+- `ERROR: NOT AUTHORIZED` - User/chat is not authorized to use the bot
+- `ERROR: ONLY OWNER CAN USE /AUTH` - Non-owner attempting owner command
+
+### Search Errors
+- `ERROR: PROVIDE QUERY OR IMDB ID/URL` - No search query provided
+- `RESULT: NO RESULTS` - No releases found for query
+- `RESULT: NO RESULTS (WITH GP)` - No Golden Popcorn releases found
+- `ERROR: HTTP ERROR OCCURRED` - Jackett API returned an error
+- `ERROR: NETWORK ERROR OCCURRED` - Network connectivity issue
+- `ERROR: UNEXPECTED ERROR OCCURRED` - Unhandled exception
+
+### Pagination Errors
+- `SESSION EXPIRED. RUN /RELEASE AGAIN.` - Pagination session expired (1 hour TTL)
+- `PAGINATION BELONGS TO ANOTHER USER` - Different user trying to use pagination
+- `INVALID CHAT FOR THIS PAGINATION` - Pagination used in wrong chat
+- `MESSAGE NO LONGER AVAILABLE` - Original message was deleted
+
+**Source:** `jackett_bot/handlers/commands.py:76-174`
+
+---
+
+## Response Format
+
+All bot responses use HTML formatting with a consistent key-value structure:
+
+```python
+# Format: <b><u>LABEL:</u></b> <code>VALUE</code>
+```
+
+**Example Response:**
+```html
+<b><u>STATUS:</u></b> <code>BOT STARTED</code>
+```
+
+**Rendered as:**
+```
+STATUS: BOT STARTED
+```
+
+**Source:** `jackett_bot/handlers/commands.py:257`

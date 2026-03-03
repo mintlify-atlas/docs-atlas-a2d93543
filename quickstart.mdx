@@ -1,80 +1,354 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quick Start
+description: Get JackettSearchBot running in minutes with this step-by-step guide
 ---
 
-## Get started in three steps
+## Prerequisites
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
+Before you begin, ensure you have the following:
 
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Python 3.10+" icon="python">
+    JackettSearchBot requires Python 3.10 or higher. Check your version with `python --version`.
+  </Card>
+  <Card title="uv Package Manager" icon="box">
+    Install [uv](https://docs.astral.sh/uv/) for fast dependency management: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+  </Card>
+  <Card title="Telegram Bot Token" icon="telegram">
+    Create a bot via [@BotFather](https://t.me/BotFather) on Telegram to get your bot token.
+  </Card>
+  <Card title="Jackett Instance" icon="server">
+    A running Jackett instance (localhost or remote) with an API key.
+  </Card>
 </CardGroup>
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+You'll also need your Telegram API credentials (API_ID and API_HASH) from [my.telegram.org](https://my.telegram.org/apps).
 </Note>
+
+## Installation
+
+<Steps>
+  <Step title="Clone the Repository">
+    Clone the JackettSearchBot repository and navigate to the directory:
+
+    ```bash
+    git clone https://github.com/yourusername/JackettSearchBot.git
+    cd JackettSearchBot
+    ```
+  </Step>
+
+  <Step title="Install Dependencies with uv">
+    Use `uv` to create a virtual environment and install all dependencies:
+
+    ```bash
+    uv sync
+    ```
+
+    This command automatically:
+    - Creates a `.venv` directory with a virtual environment
+    - Installs all dependencies from `pyproject.toml`
+    - Installs `tgcrypto` on Python 3.10-3.12 (skipped on 3.13+ without C++ tools)
+
+    <Note>
+    You don't need to manually activate the virtual environment when using `uv run` commands.
+    </Note>
+  </Step>
+
+  <Step title="Create Configuration File">
+    Copy the example configuration file and open it for editing:
+
+    ```bash
+    cp config.env.example config.env
+    nano config.env  # or use your preferred editor
+    ```
+  </Step>
+
+  <Step title="Configure Environment Variables">
+    Fill in your configuration values in `config.env`:
+
+    ```env
+    # Telegram Bot Configuration
+    TELEGRAM_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+    API_ID=12345678
+    API_HASH=0123456789abcdef0123456789abcdef
+
+    # Jackett Configuration
+    JACKETT_API_KEY=your_jackett_api_key_here
+    JACKETT_URL=http://localhost:9117
+
+    # Authorization
+    AUTHORIZED_CHAT_IDS=123456789,987654321
+    OWNER_ID=123456789
+
+    # Bot Behavior
+    MAX_RESULTS=10
+    REDACT_AFTER_SECONDS=300
+
+    # Logging
+    LOG_FILE_PATH=logs/jackett_bot.log
+    CONSOLE_LOG_LEVEL=INFO
+    FILE_LOG_LEVEL=DEBUG
+    ```
+
+    ### Configuration Reference
+
+    | Variable | Description | Required | Default |
+    |----------|-------------|----------|----------|
+    | `TELEGRAM_TOKEN` | Bot token from @BotFather | Yes | - |
+    | `API_ID` | Telegram API ID from my.telegram.org | Yes | - |
+    | `API_HASH` | Telegram API hash from my.telegram.org | Yes | - |
+    | `JACKETT_API_KEY` | Your Jackett API key | Yes | - |
+    | `JACKETT_URL` | Jackett base URL (with protocol) | Yes | - |
+    | `AUTHORIZED_CHAT_IDS` | Comma-separated chat/user IDs with access | No | Empty |
+    | `OWNER_ID` | Your Telegram user ID (for admin commands) | Yes | - |
+    | `MAX_RESULTS` | Results per page | No | `10` |
+    | `REDACT_AFTER_SECONDS` | Auto-redaction timeout for results | No | `300` |
+    | `LOG_FILE_PATH` | Path for rotating log file | No | `logs/jackett_bot.log` |
+    | `CONSOLE_LOG_LEVEL` | Console logging level | No | `INFO` |
+    | `FILE_LOG_LEVEL` | File logging level | No | `DEBUG` |
+
+    <Warning>
+    Never commit `config.env` to version control! Add it to your `.gitignore` to prevent accidentally exposing your credentials.
+    </Warning>
+  </Step>
+</Steps>
+
+## Getting Your Credentials
+
+<Steps>
+  <Step title="Get Telegram Bot Token">
+    1. Open Telegram and search for [@BotFather](https://t.me/BotFather)
+    2. Send `/newbot` and follow the prompts
+    3. Choose a name and username for your bot
+    4. Copy the bot token provided (format: `123456789:ABCdefGHI...`)
+  </Step>
+
+  <Step title="Get Telegram API Credentials">
+    1. Visit [my.telegram.org/apps](https://my.telegram.org/apps)
+    2. Log in with your phone number
+    3. Create a new application
+    4. Copy your `api_id` (numeric) and `api_hash` (hex string)
+  </Step>
+
+  <Step title="Get Your Telegram User ID">
+    Get your user ID for the `OWNER_ID` field:
+
+    1. Send a message to [@userinfobot](https://t.me/userinfobot)
+    2. Copy your numeric ID (this grants you admin access)
+  </Step>
+
+  <Step title="Get Jackett API Key">
+    1. Open your Jackett web interface (usually `http://localhost:9117`)
+    2. Find the API Key at the top right corner
+    3. Copy the key (it's displayed next to "API Key:")
+  </Step>
+</Steps>
+
+## Running the Bot
+
+Once configured, start the bot with:
+
+```bash
+uv run python main.py
+```
+
+You should see output like this:
+
+```plaintext
+2026-03-03 12:00:00 | INFO | JackettSearchBot | JackettSearchBot initialized.
+2026-03-03 12:00:00 | INFO | JackettSearchBot | Logging configured | console=INFO | file=DEBUG | path=/path/to/logs/jackett_bot.log
+2026-03-03 12:00:00 | INFO | JackettSearchBot | Initialization complete. Configuration is valid.
+2026-03-03 12:00:00 | INFO | JackettSearchBot | Starting bot runtime.
+```
+
+<Note>
+The bot runs in the foreground by default. Press `Ctrl+C` to stop it gracefully. For production deployments, see the [Running](/setup/running) guide.
+</Note>
+
+## Verify Bot Access
+
+Test that everything is working:
+
+<Steps>
+  <Step title="Find Your Bot">
+    Search for your bot on Telegram using the username you chose in @BotFather.
+  </Step>
+
+  <Step title="Start the Bot">
+    Send `/start` to your bot. You should receive:
+
+    ```
+    STATUS: BOT STARTED
+    ```
+
+    If you get `ERROR: NOT AUTHORIZED`, verify that your user ID is in `OWNER_ID` or `AUTHORIZED_CHAT_IDS`.
+  </Step>
+
+  <Step title="View Available Commands">
+    Send `/help` to see all available commands:
+
+    ```
+    BOT COMMANDS:
+
+    /help - Show this command list.
+    /start - Verify bot access.
+    /release <query> - Search releases with pagination.
+    /release <query> -gp - Search only Golden Popcorn releases.
+    /r <query> - Short alias for /release.
+    /check - Check PTP availability (auth required).
+    /auth [id] - Owner-only temporary authorize.
+    /unauth [id] - Owner-only remove temporary authorization.
+    /unauthall - Owner-only clear temporary authorizations.
+    ```
+  </Step>
+</Steps>
+
+## First Search
+
+Let's perform your first search:
+
+<CodeGroup>
+```bash Search by Title
+/release inception
+```
+
+```bash Search by IMDb ID
+/release tt1375666
+```
+
+```bash Golden Popcorn Only
+/release inception -gp
+```
+
+```bash Using Short Alias
+/r the dark knight
+```
+</CodeGroup>
+
+The bot will respond with paginated results:
+
+```
+SEARCH RESULTS
+Query: inception
+Page: 1/3 | Total: 25
+
+Title: Inception (2010) 1080p BluRay x264
+Age: 2 d
+Size: 12.5 GB
+
+Title: Inception (2010) 720p BluRay x264
+Age: 2 d
+Size: 6.8 GB
+
+...
+
+[Prev] [Next]
+```
+
+<Note>
+Results automatically redact after 300 seconds (configurable via `REDACT_AFTER_SECONDS`) for privacy.
+</Note>
+
+## Understanding Pagination
+
+When search results exceed `MAX_RESULTS` (default: 10), the bot provides inline pagination buttons:
+
+- **Prev** - Navigate to the previous page
+- **Next** - Navigate to the next page
+- Pages persist for 1 hour (3600 seconds)
+- After `REDACT_AFTER_SECONDS`, results are automatically redacted
+- Only the user who initiated the search (or the owner) can use pagination buttons
+
+## Authorization System
+
+JackettSearchBot has a multi-tier authorization system:
+
+### Authorization Levels
+
+1. **Owner** - Defined by `OWNER_ID`, has full access to all commands
+2. **Configured IDs** - Listed in `AUTHORIZED_CHAT_IDS`, permanent access (persists across restarts)
+3. **Temporary IDs** - Added via `/auth`, cleared on bot restart
+
+### Managing Authorization (Owner Only)
+
+<CodeGroup>
+```bash Authorize Current Chat
+/auth
+```
+
+```bash Authorize Specific ID
+/auth 123456789
+```
+
+```bash Authorize Replied User
+# Reply to a user's message, then:
+/auth
+```
+
+```bash Remove Authorization
+/unauth 123456789
+```
+
+```bash Clear All Temporary
+/unauthall
+```
+</CodeGroup>
+
+<Warning>
+Temporary authorizations (via `/auth`) are stored in memory only and will be cleared when the bot restarts. For permanent access, add IDs to `AUTHORIZED_CHAT_IDS` in `config.env`.
+</Warning>
+
+## Troubleshooting
+
+### Bot Won't Start
+
+**Error: Missing required config values**
+
+```plaintext
+Initialization failed: Missing required config values: TELEGRAM_TOKEN, JACKETT_API_KEY.
+Please fill the missing values in config.env and start again.
+```
+
+**Solution:** Verify all required fields in `config.env` are filled.
+
+**Error: database is locked**
+
+```plaintext
+Session database is locked. This usually means another bot instance is still running.
+```
+
+**Solution:** Stop any other running instances or delete stale session files. The bot uses `in_memory=True` mode to avoid this issue.
+
+### Authorization Issues
+
+**ERROR: NOT AUTHORIZED**
+
+**Solution:** Add your Telegram user ID to `OWNER_ID` or `AUTHORIZED_CHAT_IDS` in `config.env`.
+
+### Search Issues
+
+**ERROR: HTTP ERROR OCCURRED**
+
+**Solution:** Verify `JACKETT_URL` is correct and Jackett is running. Check logs at `LOG_FILE_PATH` for details.
+
+**RESULT: NO RESULTS**
+
+**Solution:** Your query returned no results. Try a different search term or check that your Jackett indexers are configured and working.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Commands Reference" icon="terminal" href="/usage/commands">
+    Explore all available commands and their advanced usage.
+  </Card>
+  <Card title="Configuration Guide" icon="gear" href="/setup/configuration">
+    Deep dive into all configuration options and customization.
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/setup/running">
+    Learn how to deploy the bot in production with systemd, Docker, or PM2.
+  </Card>
+  <Card title="Services" icon="code" href="/reference/services">
+    Understand the internal services and extend the bot's functionality.
+  </Card>
+</CardGroup>

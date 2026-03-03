@@ -1,0 +1,187 @@
+---
+title: Introduction
+description: A Telegram bot for searching Jackett releases with in-chat pagination and PTP availability checks
+---
+
+## Welcome to JackettSearchBot
+
+JackettSearchBot is a powerful Telegram bot that integrates with your Jackett instance to provide seamless torrent release searching directly from Telegram. With built-in pagination, authorization controls, and PTP availability checking, it brings your media search workflow into your favorite messaging app.
+
+## What is JackettSearchBot?
+
+JackettSearchBot acts as a bridge between Telegram and Jackett, allowing you to:
+
+- **Search releases** using natural language queries or IMDb IDs
+- **Filter results** by Golden Popcorn releases
+- **Navigate results** with intuitive inline pagination buttons
+- **Control access** with owner-based authorization and temporary permissions
+- **Check PTP status** to verify service availability
+- **Auto-redact results** after a configurable timeout for privacy
+
+<Note>
+JackettSearchBot requires Python 3.10+ and a running Jackett instance. Make sure you have both set up before getting started.
+</Note>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="In-Chat Pagination" icon="arrows-left-right">
+    Navigate through search results with Prev/Next buttons directly in Telegram. Results expire after a configurable timeout for security.
+  </Card>
+  <Card title="Advanced Search" icon="magnifying-glass">
+    Search by title, keywords, or IMDb ID. Filter exclusively for Golden Popcorn releases with the `-gp` flag.
+  </Card>
+  <Card title="Authorization System" icon="lock">
+    Owner-based access control with support for configured authorized chat IDs and temporary in-memory authorization.
+  </Card>
+  <Card title="PTP Integration" icon="circle-check">
+    Check PassThePopcorn availability with a simple command to verify service status before searching.
+  </Card>
+  <Card title="Auto-Redaction" icon="clock">
+    Results automatically redact after 300 seconds (configurable) to maintain privacy and reduce clutter.
+  </Card>
+  <Card title="Production Ready" icon="server">
+    Built with async/await, rotating file logs, environment-based configuration, and graceful error handling.
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+JackettSearchBot is built with a clean, modular architecture:
+
+```python
+jackett_bot/
+├── app.py              # Bot initialization and handler registration
+├── config.py           # Environment-based configuration with validation
+├── handlers/
+│   └── commands.py     # Telegram command handlers and pagination logic
+└── services/
+    ├── auth.py         # Thread-safe authorization service
+    ├── jackett.py      # Jackett API integration and XML parsing
+    └── ptp.py          # PTP availability health check
+```
+
+### Core Components
+
+**JackettSearchBot** (`app.py:13`)
+
+The main bot class that orchestrates all services and registers Pyrogram handlers.
+
+```python
+from jackett_bot import JackettSearchBot
+
+bot = JackettSearchBot.initialize("config.env")
+bot.run()
+```
+
+**BotConfig** (`config.py:8`)
+
+Immutable configuration loaded from environment variables with comprehensive validation.
+
+```python
+@dataclass(frozen=True)
+class BotConfig:
+    token: str
+    api_id: int
+    api_hash: str
+    jackett_api_key: str
+    jackett_url: str
+    default_max_results: int
+    redact_after_seconds: int
+    log_file_path: str
+    console_log_level: int
+    file_log_level: int
+    authorized_chat_ids: list[int]
+    owner_id: int
+```
+
+**JackettService** (`services/jackett.py:29`)
+
+Handles all Jackett API communication, URL construction, and XML response parsing.
+
+```python
+class JackettService:
+    def build_search_url(self, query: str) -> str:
+        if query.startswith("tt") and query[2:].isdigit():
+            return (
+                f"{self.jackett_url}/api/v2.0/indexers/all/results/torznab/api"
+                f"?apikey={self.jackett_api_key}&imdbid={query}"
+            )
+        
+        encoded_query = quote(query)
+        return (
+            f"{self.jackett_url}/api/v2.0/indexers/all/results/torznab/api"
+            f"?apikey={self.jackett_api_key}&t=search&q={encoded_query}"
+        )
+```
+
+**AuthorizationService** (`services/auth.py:5`)
+
+Thread-safe authorization management with both persistent (configured) and temporary (in-memory) ID tracking.
+
+```python
+class AuthorizationService:
+    def __init__(self, bootstrap_ids: Iterable[int] | None = None):
+        self._lock = threading.RLock()
+        self._configured_ids: set[int] = set()
+        self._temporary_ids: set[int] = set()
+```
+
+## Search Result Format
+
+Search results are parsed from Jackett's XML response and formatted with title, age, and size:
+
+```python
+@dataclass(frozen=True)
+class SearchResult:
+    title: str
+    age: str
+    size: str
+
+    def as_html(self) -> str:
+        return (
+            f"<b>Title:</b> <code>{self.title}</code>\n"
+            f"<b>Age:</b> {self.age}\n"
+            f"<b>Size:</b> {self.size}\n"
+        )
+```
+
+## Security & Privacy
+
+JackettSearchBot includes several security features:
+
+- **Owner-only commands** for authorization management
+- **Multi-level authorization** (owner, configured IDs, temporary IDs)
+- **Auto-redaction** of search results after timeout
+- **In-memory sessions** to avoid persistent lock issues
+- **Environment-based secrets** with validation on startup
+
+<Warning>
+Never commit your `config.env` file to version control. It contains sensitive tokens and API keys. Always use the provided `config.env.example` as a template.
+</Warning>
+
+## Technology Stack
+
+JackettSearchBot is built with modern Python libraries:
+
+- **[Pyrogram](https://docs.pyrogram.org/)** - MTProto API framework for Telegram
+- **[httpx](https://www.python-httpx.org/)** - Async HTTP client for Jackett API calls
+- **[python-dotenv](https://github.com/theskumar/python-dotenv)** - Environment variable management
+- **[tgcrypto](https://github.com/pyrogram/tgcrypto)** - Cryptography library for faster encryption (Python < 3.13)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get your bot up and running in minutes with our step-by-step guide.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/setup/configuration">
+    Learn about all available configuration options and environment variables.
+  </Card>
+  <Card title="Commands" icon="terminal" href="/usage/commands">
+    Explore all available bot commands and their usage.
+  </Card>
+  <Card title="Deployment" icon="cloud" href="/setup/running">
+    Production deployment strategies and best practices.
+  </Card>
+</CardGroup>

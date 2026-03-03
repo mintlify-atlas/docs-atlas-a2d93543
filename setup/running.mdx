@@ -1,0 +1,493 @@
+---
+title: Running the Bot
+description: How to start, stop, and manage JackettSearchBot in development and production
+---
+
+## Starting the Bot
+
+Once you've [installed](/setup/installation) and [configured](/setup/configuration) JackettSearchBot, you can start it with:
+
+```bash
+uv run python main.py
+```
+
+<Note>
+  Using `uv run` ensures the correct virtual environment is used without manual activation.
+</Note>
+
+## Startup Process
+
+When the bot starts, it goes through several initialization steps:
+
+<Steps>
+
+<Step title="Load configuration">
+  The bot loads `config.env` and validates all required variables.
+  
+  From `main.py:4-9`:
+  ```python
+  try:
+      bot = JackettSearchBot.initialize("config.env")
+  except ValueError as exc:
+      print(f"Initialization failed: {exc}")
+      print("Please fill the missing values in config.env and start again.")
+      raise SystemExit(1) from exc
+  ```
+</Step>
+
+<Step title="Initialize logging">
+  The bot sets up logging with rotating file handler and console output.
+  
+  Log files are created at the path specified in `LOG_FILE_PATH` (default: `logs/jackett_bot.log`).
+</Step>
+
+<Step title="Initialize services">
+  The bot initializes internal services:
+  - **AuthorizationService** - Manages user access control
+  - **JackettService** - Handles Jackett API communication
+  - **PTPService** - Checks PassThePopcorn availability
+</Step>
+
+<Step title="Register handlers">
+  Command handlers are registered for Telegram commands:
+  - `/start`, `/help`
+  - `/release`, `/r` (with alias `/relase`)
+  - `/check`
+  - `/auth`, `/unauth`, `/unauthall`
+  
+  From `app.py:56-87`
+</Step>
+
+<Step title="Start Pyrogram client">
+  The Telegram client connects and begins polling for messages.
+  
+  You'll see:
+  ```
+  2026-03-03 12:00:00 | INFO | JackettSearchBot | Starting bot runtime.
+  ```
+</Step>
+
+</Steps>
+
+## Successful Startup
+
+When the bot starts successfully, you'll see log output like:
+
+```
+2026-03-03 12:00:00 | INFO | JackettSearchBot | JackettSearchBot initialized.
+2026-03-03 12:00:00 | INFO | JackettSearchBot | Logging configured | console=INFO | file=DEBUG | path=/home/user/JackettSearchBot/logs/jackett_bot.log
+2026-03-03 12:00:00 | INFO | JackettSearchBot | Initialization complete. Configuration is valid.
+2026-03-03 12:00:00 | INFO | JackettSearchBot | Starting bot runtime.
+```
+
+The bot is now running and ready to receive commands.
+
+## Stopping the Bot
+
+To stop the bot gracefully:
+
+1. Press `Ctrl+C` in the terminal
+2. The bot will catch the interrupt signal and shut down cleanly
+
+From `app.py:89-113`, the shutdown process:
+
+```python
+try:
+    self.app.run()
+except KeyboardInterrupt:
+    self.logger.info("Stop signal received (KeyboardInterrupt). Exiting gracefully.")
+except Exception:
+    self.logger.exception("Fatal runtime error. Bot stopped unexpectedly.")
+    raise
+finally:
+    self._shutdown_services()
+    self.logger.info("Bot shutdown complete.")
+```
+
+<Note>
+  The bot closes all HTTP clients and cleans up resources during shutdown.
+</Note>
+
+## Running in Production
+
+For production deployments, you should run the bot as a service that automatically restarts on failure.
+
+### Option 1: systemd (Linux)
+
+Create a systemd service file at `/etc/systemd/system/jackett-bot.service`:
+
+```ini
+[Unit]
+Description=JackettSearchBot Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your-user
+WorkingDirectory=/path/to/JackettSearchBot
+Environment="PATH=/path/to/JackettSearchBot/.venv/bin:/usr/bin"
+ExecStart=/usr/local/bin/uv run python main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable jackett-bot
+sudo systemctl start jackett-bot
+```
+
+Check status and logs:
+
+```bash
+# Check status
+sudo systemctl status jackett-bot
+
+# View logs
+sudo journalctl -u jackett-bot -f
+```
+
+### Option 2: Docker
+
+Create a `Dockerfile`:
+
+```dockerfile
+FROM python:3.11-slim
+
+# Install uv
+RUN pip install uv
+
+# Set working directory
+WORKDIR /app
+
+# Copy project files
+COPY pyproject.toml uv.lock ./
+COPY jackett_bot ./jackett_bot
+COPY main.py ./
+
+# Install dependencies
+RUN uv sync --frozen
+
+# Create logs directory
+RUN mkdir -p logs
+
+# Run the bot
+CMD ["uv", "run", "python", "main.py"]
+```
+
+Create `docker-compose.yml`:
+
+```yaml
+version: '3.8'
+
+services:
+  jackett-bot:
+    build: .
+    container_name: jackett-bot
+    restart: unless-stopped
+    volumes:
+      - ./config.env:/app/config.env:ro
+      - ./logs:/app/logs
+    network_mode: "host"
+```
+
+Run with Docker Compose:
+
+```bash
+# Build and start
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
+```
+
+<Warning>
+  When using Docker, ensure `JACKETT_URL` in `config.env` points to a reachable address. Use `host.docker.internal` on macOS/Windows or the host IP on Linux if Jackett is on the host machine.
+</Warning>
+
+### Option 3: PM2 (Node.js Process Manager)
+
+Install PM2 globally:
+
+```bash
+npm install -g pm2
+```
+
+Create `ecosystem.config.js`:
+
+```javascript
+module.exports = {
+  apps: [{
+    name: 'jackett-bot',
+    script: 'uv',
+    args: 'run python main.py',
+    cwd: '/path/to/JackettSearchBot',
+    autorestart: true,
+    max_restarts: 10,
+    restart_delay: 5000,
+    error_file: './logs/pm2-error.log',
+    out_file: './logs/pm2-out.log',
+  }]
+};
+```
+
+Manage with PM2:
+
+```bash
+# Start
+pm2 start ecosystem.config.js
+
+# Monitor
+pm2 monit
+
+# View logs
+pm2 logs jackett-bot
+
+# Restart
+pm2 restart jackett-bot
+
+# Stop
+pm2 stop jackett-bot
+
+# Make it start on boot
+pm2 startup
+pm2 save
+```
+
+## Monitoring and Logs
+
+### Log Files
+
+The bot writes detailed logs to the file specified in `LOG_FILE_PATH`. Logs use a rotating file handler:
+
+- **Max file size:** 10 MB
+- **Backup files:** 5
+- **Total storage:** Up to 60 MB
+
+From `app.py:135-140`:
+
+```python
+file_handler = RotatingFileHandler(
+    filename=log_path,
+    maxBytes=10 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8",
+)
+```
+
+### Log Format
+
+**Console logs** (simpler format):
+```
+%(asctime)s | %(levelname)s | %(name)s | %(message)s
+```
+
+**File logs** (detailed format):
+```
+%(asctime)s | %(levelname)s | %(name)s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s
+```
+
+### Viewing Logs
+
+```bash
+# Tail the log file
+tail -f logs/jackett_bot.log
+
+# Search for errors
+grep ERROR logs/jackett_bot.log
+
+# View recent logs
+tail -n 100 logs/jackett_bot.log
+```
+
+## Troubleshooting
+
+### Bot Won't Start
+
+**Symptom:** Bot exits immediately after starting
+
+**Solution:** Check for configuration errors:
+
+```bash
+uv run python main.py
+```
+
+Look for validation errors about missing or invalid configuration values.
+
+### Database Locked Error
+
+**Symptom:** Error message about database being locked
+
+```
+SQLite operational error: database is locked
+```
+
+**Solution:** From `app.py:95-104`, this happens when another instance is running:
+
+1. Check for other running instances:
+   ```bash
+   ps aux | grep main.py
+   ```
+
+2. Stop the other instance:
+   ```bash
+   pkill -f "python main.py"
+   ```
+
+3. If the issue persists, remove stale session files:
+   ```bash
+   rm -f jackett_bot.session*
+   ```
+
+<Note>
+  The bot uses `in_memory=True` for sessions (from `app.py:40-46`) to avoid persistent session locks, but this error can still occur if multiple instances start simultaneously.
+</Note>
+
+### Connection Errors
+
+**Symptom:** Cannot connect to Telegram or Jackett
+
+**Solutions:**
+
+1. **Check network connectivity:**
+   ```bash
+   ping api.telegram.org
+   curl -I $JACKETT_URL
+   ```
+
+2. **Verify Jackett URL** in `config.env` is correct and reachable
+
+3. **Check firewall rules** allow outbound connections
+
+4. **Verify API credentials** are correct and not expired
+
+### Bot Crashes or Restarts
+
+**Symptom:** Bot stops unexpectedly
+
+**Solution:**
+
+1. Check the log file for error messages:
+   ```bash
+   tail -n 50 logs/jackett_bot.log
+   ```
+
+2. Look for patterns before crashes (specific commands, high load, etc.)
+
+3. Ensure system has sufficient resources (memory, disk space)
+
+4. Update dependencies:
+   ```bash
+   uv sync
+   ```
+
+### High Memory Usage
+
+**Symptom:** Bot uses excessive memory
+
+**Solutions:**
+
+1. **Reduce MAX_RESULTS** in `config.env` to show fewer results per page
+
+2. **Decrease REDACT_AFTER_SECONDS** to free message data sooner
+
+3. **Monitor with system tools:**
+   ```bash
+   ps aux | grep python
+   top -p $(pgrep -f main.py)
+   ```
+
+## Health Checks
+
+You can verify the bot is running and responsive:
+
+### Manual Check
+
+Send `/start` to the bot on Telegram. You should receive a response confirming access.
+
+### Process Check
+
+```bash
+# Check if process is running
+pgrep -f "python main.py"
+
+# Check with full details
+ps aux | grep "python main.py"
+```
+
+### Log Check
+
+Recent log activity indicates the bot is running:
+
+```bash
+# Check last log entry
+tail -n 1 logs/jackett_bot.log
+
+# Check for recent activity
+find logs/jackett_bot.log -mmin -5
+```
+
+## Performance Tips
+
+1. **Use tgcrypto** - Automatically installed on Python < 3.13 for better performance
+
+2. **Optimize MAX_RESULTS** - Balance between usability and performance (recommended: 10-15)
+
+3. **Monitor logs** - Use INFO level for console, DEBUG for files
+
+4. **Regular restarts** - If running 24/7, restart weekly to clear accumulated state
+
+5. **Resource limits** - Set appropriate limits in systemd or Docker to prevent resource exhaustion
+
+## Best Practices
+
+<Steps>
+
+<Step title="Use a process manager">
+  Always run the bot with a process manager (systemd, Docker, PM2) in production to ensure automatic restarts.
+</Step>
+
+<Step title="Monitor logs regularly">
+  Set up log rotation and monitoring to catch issues early:
+  ```bash
+  # Add to crontab
+  0 0 * * * find /path/to/logs -name "*.log.*" -mtime +30 -delete
+  ```
+</Step>
+
+<Step title="Keep backups">
+  While the bot doesn't store persistent data, keep backups of:
+  - `config.env` (securely)
+  - Custom modifications to the code
+</Step>
+
+<Step title="Update regularly">
+  Keep dependencies updated for security patches:
+  ```bash
+  uv sync
+  ```
+</Step>
+
+<Step title="Test before deploying">
+  Always test configuration changes in a development environment first.
+</Step>
+
+</Steps>
+
+## Next Steps
+
+Now that your bot is running:
+
+- [Learn Bot Commands](/usage/commands) - Understand how to use the bot
+- [Project Structure](/reference/project-structure) - Explore the codebase structure
+- [Best Practices](/reference/best-practices) - Production deployment tips

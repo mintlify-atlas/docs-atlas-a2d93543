@@ -1,0 +1,574 @@
+---
+title: 'Searching for Releases'
+description: 'Learn how to search for releases, use pagination, apply filters, and understand search results'
+---
+
+## Overview
+
+JackettSearchBot provides powerful search capabilities through Jackett's unified API, allowing you to search across multiple torrent indexers simultaneously. This page covers search syntax, pagination, filtering, and result interpretation.
+
+## Basic Search
+
+To search for releases, use the `/release` command (or its alias `/r`) followed by your query:
+
+```
+/release <query>
+```
+
+### Text Search
+
+Search using any text string:
+
+<Tabs>
+  <Tab title="Movie Title">
+    ```
+    /release The Shawshank Redemption
+    ```
+    Searches for releases matching "The Shawshank Redemption"
+  </Tab>
+  <Tab title="With Year">
+    ```
+    /release Blade Runner 2049
+    ```
+    Include year to narrow results
+  </Tab>
+  <Tab title="Short Alias">
+    ```
+    /r Inception
+    ```
+    Use `/r` for quicker searches
+  </Tab>
+</Tabs>
+
+### IMDb ID Search
+
+For more precise results, use an IMDb ID. The bot automatically detects IDs starting with "tt" followed by digits:
+
+```
+/release tt0111161
+```
+
+**How it works:**
+
+```python
+# From jackett_bot/services/jackett.py:42
+def build_search_url(self, query: str) -> str:
+    if query.startswith("tt") and query[2:].isdigit():
+        return (
+            f"{self.jackett_url}/api/v2.0/indexers/all/results/torznab/api"
+            f"?apikey={self.jackett_api_key}&imdbid={query}"
+        )
+```
+
+<Info>
+IMDb IDs provide more accurate results as they search using Jackett's `imdbid` parameter instead of text search.
+</Info>
+
+**Finding IMDb IDs:**
+1. Go to IMDb.com
+2. Search for the movie/show
+3. Look at the URL: `https://www.imdb.com/title/tt0133093/`
+4. The ID is `tt0133093`
+
+---
+
+## Filtering Results
+
+### Golden Popcorn Filter
+
+Filter results to show only Golden Popcorn releases using the `-gp` flag:
+
+```
+/release The Matrix -gp
+```
+
+**Flag placement:**
+```
+/release <query> -gp
+```
+
+The `-gp` flag can appear anywhere in the command after `/release`:
+
+```python
+# From jackett_bot/handlers/commands.py:89-91
+golden_popcorn = "-gp" in command_parts
+query_parts = [part for part in command_parts if part != "-gp"]
+query = " ".join(query_parts)
+```
+
+**Examples:**
+
+<Tabs>
+  <Tab title="Text + GP">
+    ```
+    /release Inception -gp
+    ```
+  </Tab>
+  <Tab title="IMDb + GP">
+    ```
+    /release tt1375666 -gp
+    ```
+  </Tab>
+  <Tab title="Flag First">
+    ```
+    /release -gp Inception
+    ```
+    Works the same way
+  </Tab>
+</Tabs>
+
+**How filtering works:**
+
+```python
+# From jackett_bot/services/jackett.py:111
+if golden_popcorn and "Golden Popcorn" not in title:
+    continue  # Skip non-GP releases
+```
+
+<Note>
+The Golden Popcorn filter is applied client-side after receiving results from Jackett. It searches for "Golden Popcorn" in the release title.
+</Note>
+
+---
+
+## Understanding Results
+
+### Result Format
+
+Each result displays three key pieces of information:
+
+```
+Title: <release title>
+Age: <time since upload>
+Size: <file size>
+```
+
+**Example:**
+```
+Title: The.Matrix.1999.2160p.UHD.BluRay.x265 [Golden Popcorn]
+Age: 3 d
+Size: 15.2 GB
+```
+
+### Result Fields
+
+<Accordion title="Title">
+
+**Content:** Full release name including quality, format, and tags
+
+**Examples:**
+- `Movie.Name.2023.1080p.BluRay.x264-GROUP`
+- `Movie.Name.2023.2160p.UHD.BluRay.x265 [Golden Popcorn]`
+- `Show.Name.S01E01.720p.WEB.H264-GROUP`
+
+**Source:** `jackett_bot/services/jackett.py:18-23`
+
+</Accordion>
+
+<Accordion title="Age">
+
+**Content:** Time elapsed since the release was uploaded
+
+**Format:**
+- Less than 60 seconds: `X s`
+- Less than 60 minutes: `X m`
+- Less than 24 hours: `X h`
+- 24+ hours: `X d`
+
+**Examples:**
+- `45 s` - 45 seconds ago
+- `23 m` - 23 minutes ago
+- `5 h` - 5 hours ago
+- `12 d` - 12 days ago
+
+**Implementation:**
+
+```python
+# From jackett_bot/services/jackett.py:79-97
+def format_pub_date(pub_date: str) -> str:
+    date_obj = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z")
+    time_elapsed = datetime.now(date_obj.tzinfo) - date_obj
+    
+    if time_elapsed.days > 0:
+        return f"{time_elapsed.days} d"
+    
+    hours, remainder = divmod(time_elapsed.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    if hours > 0:
+        return f"{hours} h"
+    if minutes > 0:
+        return f"{minutes} m"
+    return f"{seconds} s"
+```
+
+</Accordion>
+
+<Accordion title="Size">
+
+**Content:** File size in human-readable format
+
+**Units:** B, KB, MB, GB, TB, PB, EB, ZB, YB
+
+**Examples:**
+- `1.5 GB`
+- `750.25 MB`
+- `15.2 GB`
+
+**Implementation:**
+
+```python
+# From jackett_bot/services/jackett.py:68-76
+def convert_size(size_bytes: int) -> str:
+    if size_bytes == 0:
+        return "0 B"
+    
+    size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+    index = int(math.floor(math.log(size_bytes, 1024)))
+    power = math.pow(1024, index)
+    size = round(size_bytes / power, 2)
+    return f"{size} {size_name[index]}"
+```
+
+</Accordion>
+
+### Result Header
+
+Each result page includes a header with search metadata:
+
+```
+SEARCH RESULTS
+Query: <your query>
+Page: 1/5 | Total: 47
+```
+
+**For Golden Popcorn searches:**
+```
+SEARCH RESULTS (GP)
+Query: <your query>
+Page: 1/5 | Total: 12
+```
+
+---
+
+## Pagination
+
+### How Pagination Works
+
+When your search returns more results than the configured page size, pagination buttons appear below the results:
+
+- **Prev** - Navigate to previous page
+- **Next** - Navigate to next page
+
+**Page size configuration:**
+```env
+# In config.env
+MAX_RESULTS=10  # Default: 10 results per page
+```
+
+### Pagination Sessions
+
+Each search creates a unique pagination session:
+
+```python
+# From jackett_bot/handlers/commands.py:19-26
+@dataclass
+class ReleasePaginationSession:
+    session_id: str              # Unique 12-character hex ID
+    requester_user_id: int       # User who initiated search
+    chat_id: int                 # Chat where search was performed
+    query: str                   # Original search query
+    golden_popcorn: bool         # Whether -gp filter was used
+    results: list[SearchResult]  # All search results
+    created_at: float            # Unix timestamp
+```
+
+### Session Properties
+
+<Accordion title="Session Expiration">
+
+**Lifetime:** 1 hour (3600 seconds)
+
+```python
+# From jackett_bot/handlers/commands.py:44
+self._pagination_ttl_seconds = 3600
+```
+
+**What happens when expired:**
+- Clicking pagination buttons shows: `SESSION EXPIRED. RUN /RELEASE AGAIN.`
+- Session data is automatically pruned from memory
+
+**Cleanup process:**
+
+```python
+# From jackett_bot/handlers/commands.py:330-338
+def _prune_expired_sessions(self):
+    now = time.time()
+    expired_session_ids = [
+        session_id
+        for session_id, session in self._pagination_sessions.items()
+        if now - session.created_at > self._pagination_ttl_seconds
+    ]
+    for session_id in expired_session_ids:
+        self._pagination_sessions.pop(session_id, None)
+```
+
+</Accordion>
+
+<Accordion title="User Isolation">
+
+**Access control:** Only the user who initiated the search can use the pagination buttons.
+
+**Exception:** The bot owner (configured via `OWNER_ID`) can navigate any user's results.
+
+```python
+# From jackett_bot/handlers/commands.py:152-154
+if requester_id != session.requester_user_id and requester_id != self.config.owner_id:
+    await callback_query.answer("PAGINATION BELONGS TO ANOTHER USER", show_alert=True)
+    return
+```
+
+**Why this matters:**
+- Prevents users from interfering with each other's searches
+- Maintains privacy in group chats
+- Owner can assist with any search if needed
+
+</Accordion>
+
+<Accordion title="Chat Isolation">
+
+**Restriction:** Pagination buttons only work in the chat where the search was performed.
+
+```python
+# From jackett_bot/handlers/commands.py:156-158
+if message_chat_id != session.chat_id:
+    await callback_query.answer("INVALID CHAT FOR THIS PAGINATION", show_alert=True)
+    return
+```
+
+</Accordion>
+
+### Navigating Pages
+
+**Button visibility:**
+- **First page:** Only "Next" button appears
+- **Middle pages:** Both "Prev" and "Next" buttons appear
+- **Last page:** Only "Prev" button appears
+- **Single page:** No buttons appear
+
+**Implementation:**
+
+```python
+# From jackett_bot/handlers/commands.py:384-398
+if total_pages > 1 and page > 1:
+    nav_buttons.append(
+        InlineKeyboardButton(
+            "Prev",
+            callback_data=f"release_page:{session.session_id}:{page - 1}",
+        )
+    )
+
+if total_pages > 1 and page < total_pages:
+    nav_buttons.append(
+        InlineKeyboardButton(
+            "Next",
+            callback_data=f"release_page:{session.session_id}:{page + 1}",
+        )
+    )
+```
+
+---
+
+## Result Redaction
+
+### Auto-Redaction Feature
+
+<Warning>
+Search results are automatically redacted after a configured timeout to maintain privacy.
+</Warning>
+
+**Default timeout:** 300 seconds (5 minutes)
+
+**Configuration:**
+```env
+# In config.env
+REDACT_AFTER_SECONDS=300  # Must be >= 1
+```
+
+### How Redaction Works
+
+1. **Search initiated:** User runs `/release` command
+2. **Results displayed:** Bot sends results with pagination
+3. **Timer starts:** Redaction scheduled for configured timeout
+4. **Timeout reached:** Message is edited to show redaction notice
+5. **Session cleared:** Pagination session removed from memory
+
+**Redacted message:**
+```
+RESULTS REDACTED
+```
+
+**Implementation:**
+
+```python
+# From jackett_bot/handlers/commands.py:345-355
+async def _redact_message_later(self, session_id: str, message: Message):
+    await asyncio.sleep(self._redaction_delay_seconds)
+    self._pagination_sessions.pop(session_id, None)
+    try:
+        await message.edit_text(
+            "<code>RESULTS REDACTED</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=None,  # Removes pagination buttons
+        )
+    except Exception as exc:
+        self.logger.debug("Failed to redact release message %s: %s", message.id, exc)
+```
+
+<Info>
+Redaction is scheduled when results are first displayed. Even if you're actively paginating, the timer is based on the initial search time.
+</Info>
+
+---
+
+## Search Behavior
+
+### Loading State
+
+While searching, the bot displays a loading message:
+
+```
+STATUS: SEARCHING...
+```
+
+This message is automatically deleted once results are ready or an error occurs.
+
+### No Results
+
+If no results are found:
+
+**Standard search:**
+```
+RESULT: NO RESULTS
+```
+
+**Golden Popcorn search:**
+```
+RESULT: NO RESULTS (WITH GP)
+```
+
+### Error Handling
+
+<Tabs>
+  <Tab title="HTTP Error">
+    **Trigger:** Jackett API returns error status code
+    
+    **Response:**
+    ```
+    ERROR: HTTP ERROR OCCURRED
+    ```
+    
+    **Common causes:**
+    - Invalid API key
+    - Jackett service error
+    - Rate limiting
+  </Tab>
+  <Tab title="Network Error">
+    **Trigger:** Cannot connect to Jackett
+    
+    **Response:**
+    ```
+    ERROR: NETWORK ERROR OCCURRED
+    ```
+    
+    **Common causes:**
+    - Jackett is offline
+    - Network connectivity issues
+    - Incorrect Jackett URL
+  </Tab>
+  <Tab title="Unexpected Error">
+    **Trigger:** Unhandled exception
+    
+    **Response:**
+    ```
+    ERROR: UNEXPECTED ERROR OCCURRED
+    ```
+    
+    **Action:** Check bot logs for details
+  </Tab>
+</Tabs>
+
+**Source:** `jackett_bot/handlers/commands.py:125-133`
+
+---
+
+## Advanced Usage
+
+### Multiple Simultaneous Searches
+
+You can run multiple searches simultaneously:
+- Each creates a separate session with unique ID
+- Sessions are independent and don't interfere
+- Each session has its own expiration timer
+- Each session has its own redaction timer
+
+### Search Optimization
+
+<Note>
+For best results:
+1. Use IMDb IDs when possible for exact matches
+2. Include year in text searches to narrow results
+3. Use specific terms rather than generic ones
+4. Apply `-gp` filter to reduce result volume
+</Note>
+
+### Timeout Configuration
+
+**Search timeout:** 15 seconds (hardcoded)
+
+```python
+# From jackett_bot/services/jackett.py:54
+async def search(self, query: str, golden_popcorn: bool = False, timeout: int = 15):
+    response = await self._client.get(self.build_search_url(query), timeout=timeout)
+```
+
+If Jackett doesn't respond within 15 seconds, the search will fail with a network error.
+
+---
+
+## API Integration
+
+The bot uses Jackett's Torznab API:
+
+**Text search URL:**
+```
+{JACKETT_URL}/api/v2.0/indexers/all/results/torznab/api?apikey={API_KEY}&t=search&q={QUERY}
+```
+
+**IMDb search URL:**
+```
+{JACKETT_URL}/api/v2.0/indexers/all/results/torznab/api?apikey={API_KEY}&imdbid={IMDB_ID}
+```
+
+**Response format:** XML
+
+**Parsing:**
+
+```python
+# From jackett_bot/services/jackett.py:100-126
+def parse_search_results(response_content: bytes, golden_popcorn: bool = False):
+    root = ET.fromstring(response_content)
+    results: list[SearchResult] = []
+    
+    for item in root.findall(".//item"):
+        title = _get_item_text(item, "title")
+        size_raw = _get_item_text(item, "size")
+        pub_date = _get_item_text(item, "pubDate")
+        
+        if not title or not size_raw or not pub_date:
+            continue
+        if golden_popcorn and "Golden Popcorn" not in title:
+            continue
+        
+        # Convert and format data...
+```

@@ -1,0 +1,181 @@
+---
+title: Project Structure
+description: Overview of JackettSearchBot's architecture and directory structure
+---
+
+## Directory Layout
+
+The JackettSearchBot follows a clean, modular architecture with clear separation of concerns:
+
+```
+jackett_bot/
+├── __init__.py              # Package exports
+├── app.py                   # Bot initialization and lifecycle
+├── config.py                # Environment-based configuration
+├── handlers/
+│   ├── __init__.py
+│   └── commands.py          # Telegram command handlers
+└── services/
+    ├── __init__.py
+    ├── auth.py              # Authorization service
+    ├── jackett.py           # Jackett API integration
+    └── ptp.py               # PTP availability checker
+```
+
+## Core Components
+
+<Accordion title="app.py - Bot Application" icon="robot">
+  The main bot class that wires everything together.
+
+  **Key Responsibilities:**
+  - Initialize services (auth, jackett, ptp)
+  - Configure logging with rotating file handlers
+  - Register Pyrogram command handlers
+  - Manage bot lifecycle and graceful shutdown
+
+  **Location:** `jackett_bot/app.py:13`
+
+  ```python
+  class JackettSearchBot:
+      def __init__(self, config: BotConfig | None = None):
+          self.config = config or BotConfig.from_env("config.env")
+          self.logger = self._build_logger()
+          
+          self.auth_service = AuthorizationService(
+              bootstrap_ids=self.config.authorized_chat_ids,
+          )
+          self.jackett_service = JackettService(
+              jackett_url=self.config.jackett_url,
+              jackett_api_key=self.config.jackett_api_key,
+          )
+          self.ptp_service = PTPService()
+  ```
+</Accordion>
+
+<Accordion title="config.py - Configuration Management" icon="gear">
+  Environment-based configuration using python-dotenv.
+
+  **Key Features:**
+  - Validates required environment variables on startup
+  - Provides sensible defaults for optional settings
+  - Type-safe configuration with dataclasses
+  - Parses complex types (log levels, chat ID lists)
+
+  **Location:** `jackett_bot/config.py:8`
+
+  ```python
+  @dataclass(frozen=True)
+  class BotConfig:
+      token: str
+      api_id: int
+      api_hash: str
+      jackett_api_key: str
+      jackett_url: str
+      default_max_results: int
+      redact_after_seconds: int
+      log_file_path: str
+      console_log_level: int
+      file_log_level: int
+      authorized_chat_ids: list[int]
+      owner_id: int
+  ```
+</Accordion>
+
+<Accordion title="handlers/commands.py - Command Handlers" icon="terminal">
+  Implements all Telegram bot commands with authorization checks.
+
+  **Key Features:**
+  - Pagination session management with TTL
+  - Auto-redaction of results after configurable timeout
+  - Owner-only administrative commands
+  - HTML-formatted responses with key-value styling
+
+  **Location:** `jackett_bot/handlers/commands.py:29`
+
+  **Available Commands:**
+  - `/start` - Bot access verification
+  - `/help` - Command list
+  - `/release` - Search with pagination
+  - `/check` - PTP availability
+  - `/auth`, `/unauth`, `/unauthall` - Authorization management (owner only)
+</Accordion>
+
+<Accordion title="services/ - Service Layer" icon="server">
+  Business logic separated into three focused services:
+
+  **AuthorizationService** (`services/auth.py:5`)
+  - Thread-safe authorization management
+  - Supports both configured and temporary IDs
+  - Bootstrap from environment on startup
+
+  **JackettService** (`services/jackett.py:29`)
+  - Async HTTP client for Jackett API
+  - XML parsing of torznab results
+  - IMDB ID detection (queries starting with "tt")
+  - Golden Popcorn filtering
+
+  **PTPService** (`services/ptp.py:4`)
+  - Simple health check for PassThePopcorn
+  - Async availability testing with timeout
+</Accordion>
+
+## Entry Point
+
+The application entry point is `main.py` in the project root:
+
+```python
+from jackett_bot import JackettSearchBot
+
+if __name__ == "__main__":
+    try:
+        bot = JackettSearchBot.initialize("config.env")
+    except ValueError as exc:
+        print(f"Initialization failed: {exc}")
+        print("Please fill the missing values in config.env and start again.")
+        raise SystemExit(1) from exc
+
+    bot.run()
+```
+
+<Note>
+  The `initialize()` class method validates configuration before starting the bot, ensuring all required environment variables are present.
+</Note>
+
+## Data Flow
+
+1. **User sends command** → Pyrogram handler registered in `app.py`
+2. **Handler method** → `CommandHandlers` in `handlers/commands.py`
+3. **Authorization check** → `AuthorizationService.is_authorized()`
+4. **Business logic** → Service layer (`JackettService`, `PTPService`)
+5. **Response formatting** → HTML-formatted reply with Telegram API
+
+## Logging Architecture
+
+The bot uses Python's built-in logging with dual outputs:
+
+**Console Handler**
+- Level: Configurable via `CONSOLE_LOG_LEVEL` (default: INFO)
+- Format: `%(asctime)s | %(levelname)s | %(name)s | %(message)s`
+
+**File Handler** 
+- Level: Configurable via `FILE_LOG_LEVEL` (default: DEBUG)
+- Rotation: 10MB max size, 5 backup files
+- Format: Includes filename, line number, and function name
+- Location: Configurable via `LOG_FILE_PATH` (default: `logs/jackett_bot.log`)
+
+<Tip>
+  The file handler provides detailed debugging information including source location, making it ideal for troubleshooting issues in production.
+</Tip>
+
+## Dependencies
+
+The bot has minimal dependencies managed via `requirements.txt`:
+
+- **pyrogram** - Telegram MTProto API framework
+- **python-dotenv** - Environment variable loading
+- **httpx** - Modern async HTTP client
+- **tgcrypto** - Optional encryption speedup (Python < 3.13)
+
+<Note>
+  The project uses `uv` for dependency management with lock files for reproducible builds.
+</Note>

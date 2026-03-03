@@ -1,0 +1,626 @@
+---
+title: Best Practices
+description: Guidelines for running and maintaining JackettSearchBot in production
+---
+
+## Security
+
+### Environment Variables
+
+<Accordion title="Never Commit Secrets" icon="lock">
+  **Critical:** Keep all sensitive data in `config.env` and never commit it to version control.
+
+  ```bash
+  # Good: .gitignore already includes config.env
+  *.env
+  config.env
+  ```
+
+  **Required secrets:**
+  - `TELEGRAM_TOKEN` - Bot token from @BotFather
+  - `API_HASH` - Telegram API hash from my.telegram.org
+  - `JACKETT_API_KEY` - Jackett API key from web interface
+
+  <Tip>
+    Use `config.env.example` as a template. Copy it to `config.env` and fill in your actual values.
+  </Tip>
+</Accordion>
+
+<Accordion title="Rotate Credentials Immediately After Exposure" icon="key">
+  If any credentials are accidentally exposed:
+
+  1. **Telegram Bot Token**: Revoke via @BotFather and generate new token
+  2. **Jackett API Key**: Regenerate in Jackett web UI settings
+  3. **API Hash**: Create new application at my.telegram.org
+  4. Update `config.env` with new values
+  5. Restart the bot
+
+  **Source:** Based on guidance in `README.md:112`
+</Accordion>
+
+<Accordion title="Restrict File Permissions" icon="shield">
+  Ensure config files have restrictive permissions:
+
+  ```bash
+  chmod 600 config.env
+  ```
+
+  This prevents other users on the system from reading your secrets.
+</Accordion>
+
+### Authorization
+
+<Accordion title="Use OWNER_ID for Administrative Control" icon="crown">
+  The `OWNER_ID` bypasses all authorization checks and has access to admin commands:
+
+  - `/auth` - Grant temporary access
+  - `/unauth` - Revoke temporary access  
+  - `/unauthall` - Clear all temporary authorizations
+
+  **Best practices:**
+  - Set this to your personal Telegram user ID
+  - Never share your owner credentials
+  - Keep this separate from chat/group IDs
+
+  **Check in source:** `jackett_bot/handlers/commands.py:279`
+</Accordion>
+
+<Accordion title="Understand Authorization Layers" icon="users">
+  Authorization is checked in this order:
+
+  1. **Owner ID** - Configured via `OWNER_ID`, permanent
+  2. **Configured Chat IDs** - From `AUTHORIZED_CHAT_IDS`, permanent
+  3. **Temporary IDs** - Added via `/auth`, cleared on restart
+
+  ```python
+  def _is_authorized(self, user_id: int, chat_id: int) -> bool:
+      if self._is_owner(user_id):
+          return True
+      if self.auth_service.is_configured_id_authorized(chat_id):
+          return True
+      if self.auth_service.is_temporary_id_authorized(chat_id):
+          return True
+      if user_id and self.auth_service.is_configured_id_authorized(user_id):
+          return True
+      if user_id and self.auth_service.is_temporary_id_authorized(user_id):
+          return True
+      return False
+  ```
+
+  **Source:** `jackett_bot/handlers/commands.py:266`
+
+  <Note>
+    Because authorization checks multiple layers, removing one grant may still leave another active. Use `/unauthall` to clear all temporary grants.
+  </Note>
+</Accordion>
+
+---
+
+## Deployment
+
+### Process Management
+
+<Accordion title="Use systemd for Production" icon="server">
+  Run the bot as a systemd service for automatic restarts and logging.
+
+  **Create service file:** `/etc/systemd/system/jackett-bot.service`
+
+  ```ini
+  [Unit]
+  Description=JackettSearchBot Telegram Bot
+  After=network.target
+
+  [Service]
+  Type=simple
+  User=your-user
+  WorkingDirectory=/path/to/JackettSearchBot
+  Environment="PATH=/path/to/JackettSearchBot/.venv/bin:/usr/bin"
+  ExecStart=/path/to/uv run python main.py
+  Restart=always
+  RestartSec=10
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+  **Enable and start:**
+  ```bash
+  sudo systemctl daemon-reload
+  sudo systemctl enable jackett-bot
+  sudo systemctl start jackett-bot
+  ```
+
+  **View logs:**
+  ```bash
+  sudo journalctl -u jackett-bot -f
+  ```
+</Accordion>
+
+<Accordion title="Docker Deployment" icon="docker">
+  Run the bot in a container for isolation and easy updates.
+
+  **Example Dockerfile:**
+  ```dockerfile
+  FROM python:3.12-slim
+
+  # Install uv
+  COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+  WORKDIR /app
+
+  # Copy dependency files
+  COPY pyproject.toml uv.lock ./
+
+  # Install dependencies
+  RUN uv sync --frozen
+
+  # Copy application
+  COPY . .
+
+  # Run bot
+  CMD ["uv", "run", "python", "main.py"]
+  ```
+
+  **docker-compose.yml:**
+  ```yaml
+  version: '3.8'
+  services:
+    jackett-bot:
+      build: .
+      container_name: jackett-bot
+      restart: unless-stopped
+      env_file:
+        - config.env
+      volumes:
+        - ./logs:/app/logs
+  ```
+
+  <Tip>
+    Use Docker volumes for logs to persist across container restarts.
+  </Tip>
+</Accordion>
+
+<Accordion title="Handle Database Lock Errors" icon="database">
+  The bot uses Pyrogram's session database. If you see "database is locked" errors:
+
+  **Cause:** Another bot instance is running or a stale lock exists.
+
+  **Solution:**
+  ```python
+  # Bot uses in-memory sessions to avoid this issue
+  self.app = Client(
+      "jackett_bot",
+      api_id=self.config.api_id,
+      api_hash=self.config.api_hash,
+      bot_token=self.config.token,
+      in_memory=True,  # Prevents session file locks
+  )
+  ```
+
+  **Source:** `jackett_bot/app.py:40`
+
+  <Note>
+    The bot already uses `in_memory=True` by default, so session locks should not occur. If you modify this, be aware of potential lock issues.
+  </Note>
+</Accordion>
+
+---
+
+## Logging
+
+### Configuration
+
+<Accordion title="Dual-Output Logging Strategy" icon="list-check">
+  The bot implements two-tier logging for different use cases:
+
+  **Console Handler (stdout)**
+  - Default level: `INFO`
+  - Purpose: High-level operational visibility
+  - Configure via: `CONSOLE_LOG_LEVEL`
+  - Format: `%(asctime)s | %(levelname)s | %(name)s | %(message)s`
+
+  **File Handler (rotating)**
+  - Default level: `DEBUG`
+  - Purpose: Detailed troubleshooting
+  - Configure via: `FILE_LOG_LEVEL`
+  - Location: `logs/jackett_bot.log` (configurable)
+  - Rotation: 10MB max, 5 backup files
+  - Format: Includes filename, line number, function name
+
+  **Source:** `jackett_bot/app.py:125`
+</Accordion>
+
+<Accordion title="Log Levels" icon="layer-group">
+  Choose appropriate log levels for each environment:
+
+  | Environment | Console | File | Reasoning |
+  |------------|---------|------|----------|
+  | Development | DEBUG | DEBUG | Full visibility |
+  | Staging | INFO | DEBUG | Clean console, detailed files |
+  | Production | INFO | INFO | Reduce I/O overhead |
+  | Production (issues) | WARNING | DEBUG | Minimal console noise |
+
+  **Set in config.env:**
+  ```env
+  CONSOLE_LOG_LEVEL=INFO
+  FILE_LOG_LEVEL=DEBUG
+  ```
+
+  **Valid values:** `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
+
+  **Source:** `jackett_bot/config.py:100`
+</Accordion>
+
+<Accordion title="Log Rotation" icon="arrows-rotate">
+  The bot uses `RotatingFileHandler` to prevent unbounded log growth:
+
+  ```python
+  file_handler = RotatingFileHandler(
+      filename=log_path,
+      maxBytes=10 * 1024 * 1024,  # 10 MB
+      backupCount=5,              # Keep 5 old files
+      encoding="utf-8",
+  )
+  ```
+
+  **Result:**
+  - Current: `logs/jackett_bot.log`
+  - Backups: `logs/jackett_bot.log.1` through `logs/jackett_bot.log.5`
+  - Total max size: ~60 MB (10 MB × 6 files)
+
+  **Source:** `jackett_bot/app.py:135`
+</Accordion>
+
+---
+
+## Dependency Management
+
+### Using uv
+
+<Accordion title="Why uv?" icon="bolt">
+  The project uses [uv](https://docs.astral.sh/uv/) for faster, more reliable dependency management:
+
+  **Benefits:**
+  - 10-100× faster than pip
+  - Automatic virtual environment management
+  - Lock file for reproducible installs
+  - Built-in workspace support
+  - Compatible with pip/requirements.txt
+
+  **Key commands:**
+  ```bash
+  # Install dependencies (creates .venv automatically)
+  uv sync
+
+  # Add a new dependency
+  uv add package-name
+
+  # Update lock file after manual pyproject.toml edits
+  uv lock
+
+  # Run without activating venv
+  uv run python main.py
+  ```
+
+  **Source:** Mentioned in `README.md:21`
+</Accordion>
+
+<Accordion title="Dependency Files" icon="file">
+  The project uses modern Python packaging with `pyproject.toml`:
+
+  **pyproject.toml** (project metadata + dependencies)
+  - Defines project metadata
+  - Lists runtime dependencies
+  - Conditional dependencies (e.g., `tgcrypto` only on Python < 3.13)
+
+  **uv.lock** (locked versions)
+  - Generated by `uv lock`
+  - Contains exact versions and hashes
+  - Ensures reproducible installs across environments
+  - Commit this file to version control
+
+  **requirements.txt** (pip compatibility)
+  - Human-readable dependency list
+  - Used for documentation
+  - Can be used with pip if needed
+
+  <Tip>
+    Always run `uv lock` after manually editing `pyproject.toml` to update the lock file.
+  </Tip>
+</Accordion>
+
+<Accordion title="Optional tgcrypto" icon="lock-keyhole">
+  The bot includes `tgcrypto` for faster encryption, but it's optional:
+
+  ```toml
+  [project.dependencies]
+  tgcrypto = { version = "*", python = "<3.13" }
+  ```
+
+  **Why conditional?**
+  - Requires C++ build tools to compile
+  - Python 3.13+ has compatibility issues
+  - Bot works fine without it (just slightly slower encryption)
+
+  **If installation fails:**
+  ```bash
+  # Remove from pyproject.toml or install build tools
+  sudo apt-get install build-essential python3-dev
+  ```
+
+  **Source:** `requirements.txt:4`
+</Accordion>
+
+---
+
+## Performance
+
+### HTTP Timeouts
+
+<Accordion title="Configure Appropriate Timeouts" icon="clock">
+  The bot uses different timeouts for different operations:
+
+  **Jackett Search**
+  - Default: 15 seconds
+  - Configurable per request
+  - Increase for slow indexers or many trackers
+
+  ```python
+  # Default timeout
+  results = await jackett_service.search("query")
+
+  # Custom timeout for slow indexers
+  results = await jackett_service.search("query", timeout=30)
+  ```
+
+  **PTP Availability Check**
+  - Default: 5 seconds
+  - Intentionally short (it's just a health check)
+
+  ```python
+  is_up = await ptp_service.is_available(timeout=5)
+  ```
+
+  **Source:** `jackett_bot/services/jackett.py:54`, `jackett_bot/services/ptp.py:10`
+</Accordion>
+
+<Accordion title="Result Redaction" icon="eye-slash">
+  Search results are automatically redacted after a configurable timeout:
+
+  **Configuration:**
+  ```env
+  REDACT_AFTER_SECONDS=300  # 5 minutes
+  ```
+
+  **Behavior:**
+  - Results display normally with pagination
+  - After timeout, message changes to "RESULTS REDACTED"
+  - Pagination buttons removed
+  - Session cleaned from memory
+
+  **Why?**
+  - Reduces sensitive data exposure in chat history
+  - Prevents outdated results from being referenced
+  - Frees memory from expired pagination sessions
+
+  **Implementation:**
+  ```python
+  def _schedule_message_redaction(self, session_id: str, message: Message):
+      task = asyncio.create_task(self._redact_message_later(session_id, message))
+      self._redaction_tasks.add(task)
+      task.add_done_callback(self._redaction_tasks.discard)
+
+  async def _redact_message_later(self, session_id: str, message: Message):
+      await asyncio.sleep(self._redaction_delay_seconds)
+      self._pagination_sessions.pop(session_id, None)
+      try:
+          await message.edit_text(
+              "<code>RESULTS REDACTED</code>",
+              parse_mode=ParseMode.HTML,
+              reply_markup=None,
+          )
+      except Exception as exc:
+          self.logger.debug("Failed to redact release message %s: %s", message.id, exc)
+  ```
+
+  **Source:** `jackett_bot/handlers/commands.py:340`
+</Accordion>
+
+<Accordion title="Pagination Session Management" icon="pager">
+  Search results use in-memory pagination with automatic cleanup:
+
+  **Session TTL**
+  - Default: 3600 seconds (1 hour)
+  - Automatically pruned on new searches or page requests
+  - Prevents memory leaks from abandoned sessions
+
+  **Implementation:**
+  ```python
+  def _prune_expired_sessions(self):
+      now = time.time()
+      expired_session_ids = [
+          session_id
+          for session_id, session in self._pagination_sessions.items()
+          if now - session.created_at > self._pagination_ttl_seconds
+      ]
+      for session_id in expired_session_ids:
+          self._pagination_sessions.pop(session_id, None)
+  ```
+
+  **Session ownership:**
+  - Each session tied to requesting user ID
+  - Only requester (or owner) can change pages
+  - Prevents unauthorized pagination hijacking
+
+  **Source:** `jackett_bot/handlers/commands.py:330`
+</Accordion>
+
+---
+
+## Error Handling
+
+### Graceful Degradation
+
+<Accordion title="HTTP Error Handling" icon="triangle-exclamation">
+  The bot distinguishes between different HTTP error types:
+
+  ```python
+  try:
+      all_results = await self.jackett_service.search(query, golden_popcorn=golden_popcorn)
+  except httpx.HTTPStatusError as http_err:
+      self.logger.error("HTTP error occurred: %s", http_err)
+      await self._reply_key_value(message, "ERROR", "HTTP ERROR OCCURRED")
+  except httpx.HTTPError as http_err:
+      self.logger.error("Network error occurred: %s", http_err)
+      await self._reply_key_value(message, "ERROR", "NETWORK ERROR OCCURRED")
+  except Exception as exc:
+      self.logger.exception("Unexpected error occurred: %s", exc)
+      await self._reply_key_value(message, "ERROR", "UNEXPECTED ERROR OCCURRED")
+  ```
+
+  **Error categories:**
+  - `HTTPStatusError` - Bad status code (4xx, 5xx)
+  - `HTTPError` - Network issues (timeout, connection refused)
+  - `Exception` - Parsing errors or unexpected issues
+
+  **Source:** `jackett_bot/handlers/commands.py:125`
+
+  <Tip>
+    Detailed errors are logged but not shown to users. This prevents information leakage while maintaining debuggability.
+  </Tip>
+</Accordion>
+
+<Accordion title="Startup Validation" icon="check-circle">
+  The bot validates configuration before starting:
+
+  ```python
+  if __name__ == "__main__":
+      try:
+          bot = JackettSearchBot.initialize("config.env")
+      except ValueError as exc:
+          print(f"Initialization failed: {exc}")
+          print("Please fill the missing values in config.env and start again.")
+          raise SystemExit(1) from exc
+
+      bot.run()
+  ```
+
+  **Validation checks:**
+  - All required environment variables present
+  - Numeric values parseable as integers
+  - Log levels valid
+  - Chat IDs valid integers
+
+  **Source:** `main.py:4`, `jackett_bot/config.py:53`
+
+  <Note>
+    Fast-fail on startup prevents runtime errors from missing configuration.
+  </Note>
+</Accordion>
+
+<Accordion title="Graceful Shutdown" icon="power-off">
+  The bot handles shutdown signals cleanly:
+
+  ```python
+  def run(self):
+      self.logger.info("Starting bot runtime.")
+      try:
+          self.app.run()
+      except KeyboardInterrupt:
+          self.logger.info("Stop signal received (KeyboardInterrupt). Exiting gracefully.")
+      except sqlite3.OperationalError as exc:
+          if "database is locked" in str(exc).lower():
+              self.logger.error(
+                  "Session database is locked. This usually means another bot instance is still running "
+                  "or a stale session lock exists."
+              )
+              raise SystemExit(2) from exc
+          self.logger.exception("SQLite operational error while starting bot.")
+          raise
+      except Exception:
+          self.logger.exception("Fatal runtime error. Bot stopped unexpectedly.")
+          raise
+      finally:
+          self._shutdown_services()
+          self.logger.info("Bot shutdown complete.")
+  ```
+
+  **Cleanup actions:**
+  - Close Jackett HTTP client
+  - Close PTP HTTP client
+  - Flush log handlers
+
+  **Source:** `jackett_bot/app.py:89`
+</Accordion>
+
+---
+
+## Maintenance
+
+### Updates
+
+<Accordion title="Updating Dependencies" icon="arrows-rotate">
+  ```bash
+  # Update all dependencies to latest compatible versions
+  uv lock --upgrade
+
+  # Update specific package
+  uv add package-name --upgrade
+
+  # Install updated dependencies
+  uv sync
+  ```
+
+  <Tip>
+    Test updates in a development environment before deploying to production.
+  </Tip>
+</Accordion>
+
+<Accordion title="Monitoring" icon="chart-line">
+  **Key metrics to monitor:**
+
+  - **Bot uptime** - Use systemd status or Docker health checks
+  - **Error rates** - Parse log files for ERROR/CRITICAL entries
+  - **Response times** - Monitor Jackett timeout frequency
+  - **Authorization failures** - Track unauthorized access attempts
+
+  **Example log monitoring:**
+  ```bash
+  # Count errors in last hour
+  grep -c "ERROR" logs/jackett_bot.log
+
+  # Show recent authorization failures
+  grep "NOT AUTHORIZED" logs/jackett_bot.log | tail -20
+
+  # Monitor in real-time
+  tail -f logs/jackett_bot.log | grep -E "ERROR|CRITICAL"
+  ```
+</Accordion>
+
+<Accordion title="Backup and Recovery" icon="floppy-disk">
+  **What to backup:**
+  
+  1. **config.env** - Contains all secrets and configuration
+  2. **logs/** - For troubleshooting and audit trails
+  3. **pyproject.toml** and **uv.lock** - For reproducible deployments
+
+  **Restoration:**
+  ```bash
+  # Clone repository
+  git clone <repo-url>
+  cd JackettSearchBot
+
+  # Restore configuration
+  cp /backup/config.env .
+
+  # Install dependencies (uses committed uv.lock)
+  uv sync --frozen
+
+  # Start bot
+  uv run python main.py
+  ```
+
+  <Note>
+    The bot uses in-memory sessions, so no session database backup is needed.
+  </Note>
+</Accordion>

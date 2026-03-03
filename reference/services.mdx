@@ -1,0 +1,454 @@
+---
+title: Service Layer
+description: Documentation for JackettService, AuthorizationService, and PTPService
+---
+
+## Overview
+
+JackettSearchBot's service layer provides clean abstractions for core functionality. All services are initialized in `JackettSearchBot.__init__()` and injected into command handlers.
+
+## JackettService
+
+Handles all interactions with the Jackett API, including search queries, XML parsing, and result formatting.
+
+**Location:** `jackett_bot/services/jackett.py:29`
+
+### Initialization
+
+```python
+from jackett_bot.services.jackett import JackettService
+import httpx
+
+# Basic initialization
+service = JackettService(
+    jackett_url="http://localhost:9117",
+    jackett_api_key="your_api_key_here"
+)
+
+# With custom HTTP client
+custom_client = httpx.AsyncClient(timeout=30.0)
+service = JackettService(
+    jackett_url="http://localhost:9117",
+    jackett_api_key="your_api_key_here",
+    client=custom_client
+)
+```
+
+<Note>
+  The service automatically manages its HTTP client lifecycle. If you don't provide a client, it creates one and closes it during cleanup.
+</Note>
+
+### Methods
+
+<Accordion title="build_search_url(query: str) → str" icon="link">
+  Constructs the Jackett API URL for a given query.
+
+  **Parameters:**
+  - `query` (str): Search query or IMDB ID
+
+  **Returns:** Fully constructed Jackett API URL
+
+  **Behavior:**
+  - Detects IMDB IDs (format: `tt` followed by digits)
+  - Uses `imdbid` parameter for IMDB searches
+  - Uses `q` parameter with URL encoding for text searches
+  - Searches across all configured indexers (`/indexers/all/`)
+
+  **Example:**
+  ```python
+  # Text search
+  url = service.build_search_url("Inception 2010")
+  # Returns: http://localhost:9117/api/v2.0/indexers/all/results/torznab/api?apikey=...&t=search&q=Inception%202010
+
+  # IMDB search
+  url = service.build_search_url("tt1375666")
+  # Returns: http://localhost:9117/api/v2.0/indexers/all/results/torznab/api?apikey=...&imdbid=tt1375666
+  ```
+
+  **Source:** `jackett_bot/services/jackett.py:41`
+</Accordion>
+
+<Accordion title="search(query: str, golden_popcorn: bool, timeout: int) → list[SearchResult]" icon="magnifying-glass">
+  Performs an async search against Jackett and returns parsed results.
+
+  **Parameters:**
+  - `query` (str): Search query or IMDB ID
+  - `golden_popcorn` (bool): Filter for Golden Popcorn releases only (default: False)
+  - `timeout` (int): Request timeout in seconds (default: 15)
+
+  **Returns:** List of `SearchResult` objects
+
+  **Example:**
+  ```python
+  # Standard search
+  results = await service.search("The Matrix")
+
+  # Golden Popcorn only
+  gp_results = await service.search("Interstellar", golden_popcorn=True)
+
+  # With custom timeout
+  results = await service.search("tt0133093", timeout=30)
+  ```
+
+  **Source:** `jackett_bot/services/jackett.py:54`
+</Accordion>
+
+<Accordion title="close() → None" icon="circle-xmark">
+  Closes the HTTP client if owned by the service.
+
+  **Usage:**
+  ```python
+  await service.close()
+  ```
+
+  <Tip>
+    Always call `close()` when shutting down to avoid resource leaks. The bot's `_shutdown_services()` method handles this automatically.
+  </Tip>
+
+  **Source:** `jackett_bot/services/jackett.py:63`
+</Accordion>
+
+### SearchResult DataClass
+
+**Location:** `jackett_bot/services/jackett.py:12`
+
+```python
+@dataclass(frozen=True)
+class SearchResult:
+    title: str
+    age: str      # Human-readable time (e.g., "2 d", "5 h", "30 m")
+    size: str     # Human-readable size (e.g., "4.37 GB")
+
+    def as_html(self) -> str:
+        """Returns HTML-formatted result for Telegram."""
+        return (
+            f"<b>Title:</b> <code>{self.title}</code>\n"
+            f"<b>Age:</b> {self.age}\n"
+            f"<b>Size:</b> {self.size}\n"
+        )
+
+    def as_text(self) -> str:
+        """Returns plain text result."""
+        return f"Title: {self.title}\nAge: {self.age}\nSize: {self.size}\n"
+```
+
+### Helper Functions
+
+<CodeGroup>
+```python convert_size(size_bytes: int) → str
+def convert_size(size_bytes: int) -> str:
+    """Converts bytes to human-readable format."""
+    if size_bytes == 0:
+        return "0 B"
+
+    size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+    index = int(math.floor(math.log(size_bytes, 1024)))
+    power = math.pow(1024, index)
+    size = round(size_bytes / power, 2)
+    return f"{size} {size_name[index]}"
+```
+
+```python format_pub_date(pub_date: str) → str
+def format_pub_date(pub_date: str) -> str:
+    """Formats publication date to relative time.
+    
+    Returns:
+        - "X d" for days
+        - "X h" for hours  
+        - "X m" for minutes
+        - "X s" for seconds
+        - "unknown" on parse error
+    """
+    try:
+        date_obj = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z")
+    except ValueError:
+        return "unknown"
+
+    time_elapsed = datetime.now(date_obj.tzinfo) - date_obj
+
+    if time_elapsed.days > 0:
+        return f"{time_elapsed.days} d"
+
+    hours, remainder = divmod(time_elapsed.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    if hours > 0:
+        return f"{hours} h"
+    if minutes > 0:
+        return f"{minutes} m"
+    return f"{seconds} s"
+```
+
+```python parse_search_results(content: bytes, golden_popcorn: bool) → list[SearchResult]
+def parse_search_results(response_content: bytes, golden_popcorn: bool = False) -> list[SearchResult]:
+    """Parses XML response from Jackett into SearchResult objects.
+    
+    Filters out:
+    - Items missing title, size, or pubDate
+    - Non-Golden Popcorn results when golden_popcorn=True
+    - Items with invalid size data
+    """
+    root = ET.fromstring(response_content)
+    results: list[SearchResult] = []
+
+    for item in root.findall(".//item"):
+        title = _get_item_text(item, "title")
+        size_raw = _get_item_text(item, "size")
+        pub_date = _get_item_text(item, "pubDate")
+
+        if not title or not size_raw or not pub_date:
+            continue
+        if golden_popcorn and "Golden Popcorn" not in title:
+            continue
+
+        size_bytes = _safe_int(size_raw)
+        if size_bytes is None:
+            continue
+
+        results.append(
+            SearchResult(
+                title=title,
+                age=format_pub_date(pub_date),
+                size=convert_size(size_bytes),
+            )
+        )
+
+    return results
+```
+</CodeGroup>
+
+---
+
+## AuthorizationService
+
+Thread-safe service for managing bot access control with both permanent (configured) and temporary (runtime) authorization lists.
+
+**Location:** `jackett_bot/services/auth.py:5`
+
+### Initialization
+
+```python
+from jackett_bot.services.auth import AuthorizationService
+
+# Without bootstrap IDs
+auth_service = AuthorizationService()
+
+# With configured IDs from environment
+auth_service = AuthorizationService(
+    bootstrap_ids=[123456789, 987654321]
+)
+```
+
+### Authorization Model
+
+The service maintains two separate authorization lists:
+
+1. **Configured IDs** (`_configured_ids`)
+   - Loaded from `AUTHORIZED_CHAT_IDS` environment variable
+   - Permanent for the bot's lifetime
+   - Cannot be removed via `/unauth`
+   - Persisted across restarts (via config file)
+
+2. **Temporary IDs** (`_temporary_ids`)
+   - Added via `/auth` command at runtime
+   - Stored in-memory only
+   - Can be removed via `/unauth` or `/unauthall`
+   - Cleared when bot restarts
+
+### Methods
+
+<Accordion title="add_authorized(entity_id: int) → bool" icon="user-plus">
+  Adds a temporary authorization.
+
+  **Parameters:**
+  - `entity_id` (int): User ID or chat ID to authorize
+
+  **Returns:** `True` if added, `False` if already authorized
+
+  **Example:**
+  ```python
+  if auth_service.add_authorized(123456789):
+      print("User authorized")
+  else:
+      print("User already authorized")
+  ```
+
+  **Source:** `jackett_bot/services/auth.py:17`
+</Accordion>
+
+<Accordion title="remove_authorized(entity_id: int) → bool" icon="user-minus">
+  Removes a temporary authorization.
+
+  **Parameters:**
+  - `entity_id` (int): User ID or chat ID to unauthorize
+
+  **Returns:** `True` if removed, `False` if not in temporary list
+
+  <Note>
+    This method only removes temporary authorizations. Configured IDs cannot be removed at runtime.
+  </Note>
+
+  **Example:**
+  ```python
+  if auth_service.remove_authorized(123456789):
+      print("Authorization removed")
+  else:
+      print("Not a temporary authorization")
+  ```
+
+  **Source:** `jackett_bot/services/auth.py:25`
+</Accordion>
+
+<Accordion title="clear_authorized() → int" icon="trash">
+  Clears all temporary authorizations.
+
+  **Returns:** Count of removed authorizations
+
+  **Example:**
+  ```python
+  count = auth_service.clear_authorized()
+  print(f"Removed {count} temporary authorizations")
+  ```
+
+  **Source:** `jackett_bot/services/auth.py:33`
+</Accordion>
+
+<Accordion title="is_configured_id_authorized(entity_id: int) → bool" icon="shield-check">
+  Checks if an ID is in the configured (permanent) list.
+
+  **Source:** `jackett_bot/services/auth.py:47`
+</Accordion>
+
+<Accordion title="is_temporary_id_authorized(entity_id: int) → bool" icon="shield-check">
+  Checks if an ID is in the temporary list.
+
+  **Source:** `jackett_bot/services/auth.py:52`
+</Accordion>
+
+<Accordion title="list_configured_ids() → list[int]" icon="list">
+  Returns sorted list of all configured IDs.
+
+  **Source:** `jackett_bot/services/auth.py:39`
+</Accordion>
+
+<Accordion title="list_temporary_ids() → list[int]" icon="list">
+  Returns sorted list of all temporary IDs.
+
+  **Source:** `jackett_bot/services/auth.py:43`
+</Accordion>
+
+### Thread Safety
+
+All methods use `threading.RLock()` for thread-safe access:
+
+```python
+def add_authorized(self, entity_id: int) -> bool:
+    normalized_id = self._normalize_id(entity_id)
+    with self._lock:
+        if normalized_id in self._configured_ids or normalized_id in self._temporary_ids:
+            return False
+        self._temporary_ids.add(normalized_id)
+        return True
+```
+
+<Tip>
+  The reentrant lock (`RLock`) allows the same thread to acquire the lock multiple times, preventing deadlocks in nested calls.
+</Tip>
+
+---
+
+## PTPService
+
+Simple service for checking PassThePopcorn availability.
+
+**Location:** `jackett_bot/services/ptp.py:4`
+
+### Initialization
+
+```python
+from jackett_bot.services.ptp import PTPService
+
+# Default base URL
+ptp_service = PTPService()
+
+# Custom base URL
+ptp_service = PTPService(base_url="https://custom-ptp-url.com")
+
+# With custom HTTP client
+import httpx
+custom_client = httpx.AsyncClient()
+ptp_service = PTPService(client=custom_client)
+```
+
+### Methods
+
+<Accordion title="is_available(timeout: int) → bool" icon="circle-check">
+  Checks if PTP is reachable and responding.
+
+  **Parameters:**
+  - `timeout` (int): Request timeout in seconds (default: 5)
+
+  **Returns:** `True` if PTP responds with successful status, `False` on any HTTP error
+
+  **Example:**
+  ```python
+  if await ptp_service.is_available():
+      print("PTP is available")
+  else:
+      print("PTP is down or unreachable")
+  ```
+
+  **Implementation:**
+  ```python
+  async def is_available(self, timeout: int = 5) -> bool:
+      try:
+          response = await self._client.get(self.base_url, timeout=timeout)
+          response.raise_for_status()
+          return True
+      except httpx.HTTPError:
+          return False
+  ```
+
+  **Source:** `jackett_bot/services/ptp.py:10`
+</Accordion>
+
+<Accordion title="close() → None" icon="circle-xmark">
+  Closes the HTTP client if owned by the service.
+
+  **Source:** `jackett_bot/services/ptp.py:18`
+</Accordion>
+
+---
+
+## Service Integration
+
+Services are wired together in the `JackettSearchBot` class:
+
+```python
+class JackettSearchBot:
+    def __init__(self, config: BotConfig | None = None):
+        self.config = config or BotConfig.from_env("config.env")
+        
+        # Initialize services
+        self.auth_service = AuthorizationService(
+            bootstrap_ids=self.config.authorized_chat_ids,
+        )
+        self.jackett_service = JackettService(
+            jackett_url=self.config.jackett_url,
+            jackett_api_key=self.config.jackett_api_key,
+        )
+        self.ptp_service = PTPService()
+        
+        # Inject into command handlers
+        self.handlers = CommandHandlers(
+            config=self.config,
+            auth_service=self.auth_service,
+            jackett_service=self.jackett_service,
+            ptp_service=self.ptp_service,
+            logger=self.logger,
+        )
+```
+
+<Note>
+  This dependency injection pattern makes services easy to test and swap out if needed.
+</Note>

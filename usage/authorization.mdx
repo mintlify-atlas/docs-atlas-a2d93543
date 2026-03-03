@@ -1,0 +1,685 @@
+---
+title: 'Authorization & Access Control'
+description: 'Understanding JackettSearchBot authorization system, access levels, and security features'
+---
+
+## Overview
+
+JackettSearchBot implements a multi-layered authorization system to control who can access the bot. Access is controlled through a combination of permanent configuration and temporary runtime authorization.
+
+<Info>
+All authorization checks happen at the command level before any operations are performed.
+</Info>
+
+## Authorization Levels
+
+The bot has three levels of access:
+
+1. **Owner** - Full access including authorization management
+2. **Authorized Users/Chats** - Can use search and check commands
+3. **Unauthorized** - No access to bot commands
+
+---
+
+## Owner Access
+
+### Configuring the Owner
+
+The owner is configured via the `OWNER_ID` environment variable:
+
+```env
+# In config.env
+OWNER_ID=123456789  # Your Telegram user ID
+```
+
+<Warning>
+`OWNER_ID` is required. The bot will not start without it.
+</Warning>
+
+### Owner Privileges
+
+The owner has exclusive access to:
+- `/auth` - Grant temporary access
+- `/unauth` - Revoke temporary access
+- `/unauthall` - Clear all temporary authorizations
+
+Additionally, the owner can:
+- Use pagination controls on any user's search results
+- Cannot be removed via `/unauth` (protected)
+- Always bypasses authorization checks
+
+**Implementation:**
+
+```python
+# From jackett_bot/handlers/commands.py:279-280
+def _is_owner(self, user_id: int) -> bool:
+    return self.config.owner_id != 0 and user_id == self.config.owner_id
+```
+
+### Finding Your User ID
+
+To find your Telegram user ID:
+
+1. Message the bot `@userinfobot` on Telegram
+2. It will reply with your user ID
+3. Use this number as `OWNER_ID`
+
+---
+
+## Authorized Users & Chats
+
+There are two types of authorization: **configured** (permanent) and **temporary** (runtime).
+
+### Configured Authorization
+
+Permanent authorization is set via the `AUTHORIZED_CHAT_IDS` environment variable:
+
+```env
+# In config.env
+AUTHORIZED_CHAT_IDS=123456789,-987654321,555666777
+```
+
+**Format:**
+- Comma-separated list of IDs
+- No spaces (or spaces are trimmed)
+- Can include both user IDs and chat IDs
+- User IDs: positive integers
+- Group/channel IDs: negative integers
+
+**Examples:**
+
+<Tabs>
+  <Tab title="Single User">
+    ```env
+    AUTHORIZED_CHAT_IDS=123456789
+    ```
+    Authorizes one user
+  </Tab>
+  <Tab title="Multiple Users">
+    ```env
+    AUTHORIZED_CHAT_IDS=123456789,987654321,555666777
+    ```
+    Authorizes three users
+  </Tab>
+  <Tab title="Users + Groups">
+    ```env
+    AUTHORIZED_CHAT_IDS=123456789,-987654321
+    ```
+    Authorizes one user and one group
+  </Tab>
+  <Tab title="Empty (Owner Only)">
+    ```env
+    AUTHORIZED_CHAT_IDS=
+    ```
+    No configured authorizations (owner can add temporary ones)
+  </Tab>
+</Tabs>
+
+**Parsing logic:**
+
+```python
+# From jackett_bot/config.py:111-121
+def _parse_authorized_chat_ids(raw_chat_ids: str) -> list[int]:
+    chat_ids: list[int] = []
+    for chat_id in raw_chat_ids.split(","):
+        trimmed = chat_id.strip()
+        if not trimmed:
+            continue
+        try:
+            chat_ids.append(int(trimmed))
+        except ValueError as exc:
+            raise ValueError(f"Invalid chat id in AUTHORIZED_CHAT_IDS: {trimmed!r}") from exc
+    return chat_ids
+```
+
+<Note>
+Configured authorizations are loaded at bot startup and cannot be changed without restarting the bot.
+</Note>
+
+### Temporary Authorization
+
+The owner can grant temporary access using the `/auth` command:
+
+```
+/auth 123456789
+```
+
+**Characteristics:**
+- Stored in memory only
+- Cleared when bot restarts
+- Can be removed with `/unauth`
+- Can be bulk-removed with `/unauthall`
+
+**When to use:**
+- Testing access for new users
+- Granting temporary access
+- One-time authorization needs
+
+**When NOT to use:**
+- Permanent access (use `AUTHORIZED_CHAT_IDS`)
+- Production authorization (will be lost on restart)
+
+---
+
+## Authorization Process
+
+### How Authorization Checks Work
+
+Every protected command calls the authorization check:
+
+```python
+# From jackett_bot/handlers/commands.py:266-277
+def _is_authorized(self, user_id: int, chat_id: int) -> bool:
+    if self._is_owner(user_id):
+        return True
+    if self.auth_service.is_configured_id_authorized(chat_id):
+        return True
+    if self.auth_service.is_temporary_id_authorized(chat_id):
+        return True
+    if user_id and self.auth_service.is_configured_id_authorized(user_id):
+        return True
+    if user_id and self.auth_service.is_temporary_id_authorized(user_id):
+        return True
+    return False
+```
+
+### Check Priority (First Match Wins)
+
+1. **Owner check** - Is the user the bot owner?
+2. **Chat configured** - Is the chat ID in `AUTHORIZED_CHAT_IDS`?
+3. **Chat temporary** - Has the chat been temporarily authorized?
+4. **User configured** - Is the user ID in `AUTHORIZED_CHAT_IDS`?
+5. **User temporary** - Has the user been temporarily authorized?
+6. **Deny** - No authorization found
+
+<Info>
+Both user ID and chat ID are checked, allowing flexible authorization strategies.
+</Info>
+
+### User vs. Chat Authorization
+
+**User authorization:**
+- Follows the user across all chats
+- Works in private messages
+- Works in any group
+
+**Chat authorization:**
+- Only works in that specific chat
+- Any authorized user in that chat can use the bot
+- Useful for authorized groups
+
+**Example scenarios:**
+
+<Accordion title="Private Chat">
+
+**Scenario:** User messages bot directly
+
+**Authorization check:**
+- `user_id`: User's Telegram ID
+- `chat_id`: Same as user_id (private chats use user ID as chat ID)
+
+**Result:** Checks both user and chat authorization (effectively the same)
+
+</Accordion>
+
+<Accordion title="Group Chat">
+
+**Scenario:** User sends command in a group
+
+**Authorization check:**
+- `user_id`: User's Telegram ID (positive)
+- `chat_id`: Group's chat ID (negative)
+
+**Result:**
+- Authorized if user ID is authorized (works in any group)
+- OR if group chat ID is authorized (any member can use)
+
+</Accordion>
+
+<Accordion title="Authorized Group">
+
+**Setup:**
+```env
+AUTHORIZED_CHAT_IDS=-987654321
+```
+
+**Result:**
+- Any member of group `-987654321` can use the bot
+- Same users cannot use bot in other groups (unless user ID is also authorized)
+
+</Accordion>
+
+---
+
+## Authorization Service
+
+The `AuthorizationService` manages authorization state:
+
+```python
+# From jackett_bot/services/auth.py:5-15
+class AuthorizationService:
+    def __init__(self, bootstrap_ids: Iterable[int] | None = None):
+        self._lock = threading.RLock()  # Thread-safe
+        self._configured_ids: set[int] = set()  # From config
+        self._temporary_ids: set[int] = set()   # Runtime additions
+        
+        if bootstrap_ids:
+            self.bootstrap_authorizations(bootstrap_ids)
+```
+
+### Key Methods
+
+<Accordion title="add_authorized()">
+
+**Purpose:** Add temporary authorization
+
+**Signature:**
+```python
+def add_authorized(self, entity_id: int) -> bool
+```
+
+**Returns:**
+- `True` - Authorization added
+- `False` - Already authorized (no change)
+
+**Implementation:**
+```python
+# From jackett_bot/services/auth.py:17-23
+def add_authorized(self, entity_id: int) -> bool:
+    normalized_id = self._normalize_id(entity_id)
+    with self._lock:
+        if normalized_id in self._configured_ids or normalized_id in self._temporary_ids:
+            return False
+        self._temporary_ids.add(normalized_id)
+        return True
+```
+
+**Thread-safe:** Yes (uses RLock)
+
+</Accordion>
+
+<Accordion title="remove_authorized()">
+
+**Purpose:** Remove temporary authorization
+
+**Signature:**
+```python
+def remove_authorized(self, entity_id: int) -> bool
+```
+
+**Returns:**
+- `True` - Authorization removed
+- `False` - Not temporarily authorized
+
+**Note:** Cannot remove configured authorizations
+
+**Implementation:**
+```python
+# From jackett_bot/services/auth.py:25-31
+def remove_authorized(self, entity_id: int) -> bool:
+    normalized_id = self._normalize_id(entity_id)
+    with self._lock:
+        if normalized_id in self._temporary_ids:
+            self._temporary_ids.remove(normalized_id)
+            return True
+        return False
+```
+
+</Accordion>
+
+<Accordion title="clear_authorized()">
+
+**Purpose:** Remove all temporary authorizations
+
+**Signature:**
+```python
+def clear_authorized(self) -> int
+```
+
+**Returns:** Number of IDs removed
+
+**Note:** Only clears temporary IDs, not configured ones
+
+**Implementation:**
+```python
+# From jackett_bot/services/auth.py:33-37
+def clear_authorized(self) -> int:
+    with self._lock:
+        removed_count = len(self._temporary_ids)
+        self._temporary_ids.clear()
+        return removed_count
+```
+
+</Accordion>
+
+<Accordion title="is_configured_id_authorized()">
+
+**Purpose:** Check if ID is authorized via config
+
+**Signature:**
+```python
+def is_configured_id_authorized(self, entity_id: int) -> bool
+```
+
+**Returns:** `True` if in configured set
+
+</Accordion>
+
+<Accordion title="is_temporary_id_authorized()">
+
+**Purpose:** Check if ID is temporarily authorized
+
+**Signature:**
+```python
+def is_temporary_id_authorized(self, entity_id: int) -> bool
+```
+
+**Returns:** `True` if in temporary set
+
+</Accordion>
+
+### Thread Safety
+
+The service uses `threading.RLock()` for thread-safe operations:
+
+```python
+self._lock = threading.RLock()
+```
+
+**Why RLock?**
+- Reentrant lock (same thread can acquire multiple times)
+- Prevents race conditions
+- Safe for concurrent command handling
+
+---
+
+## Managing Authorization
+
+### Granting Access
+
+**Via `/auth` command (temporary):**
+
+<Tabs>
+  <Tab title="Explicit ID">
+    ```
+    /auth 123456789
+    ```
+    Directly authorize a specific ID
+  </Tab>
+  <Tab title="Reply to User">
+    1. Find a message from the user
+    2. Reply to it with `/auth`
+    3. Bot extracts user ID from replied message
+  </Tab>
+  <Tab title="Current Chat">
+    ```
+    /auth
+    ```
+    In a group: authorizes the group
+    In private: authorizes the user
+  </Tab>
+</Tabs>
+
+**Target extraction logic:**
+
+```python
+# From jackett_bot/handlers/commands.py:282-295
+def _extract_auth_target(self, message: Message) -> tuple[int, str, str | None]:
+    command_parts = message.text.split()[1:] if message.text else []
+    
+    # Try explicit ID first
+    if command_parts:
+        raw_target = command_parts[0].strip()
+        try:
+            return int(raw_target), "explicit id", None
+        except ValueError:
+            return 0, "", "Invalid target ID. Use /auth <id> or reply to a user message."
+    
+    # Try replied message
+    if message.reply_to_message and message.reply_to_message.from_user:
+        return message.reply_to_message.from_user.id, "replied user", None
+    
+    # Fallback to current chat
+    return message.chat.id, "current chat", None
+```
+
+### Revoking Access
+
+**Via `/unauth` command:**
+
+Uses same target extraction as `/auth`:
+- `/unauth 123456789` - Remove specific ID
+- Reply + `/unauth` - Remove replied user
+- `/unauth` alone - Remove current chat
+
+**Restrictions:**
+
+1. **Owner protection:**
+```python
+# From jackett_bot/handlers/commands.py:226-228
+if target_id == self.config.owner_id and self.config.owner_id != 0:
+    await self._reply_key_value(message, "ERROR", "OWNER CANNOT BE REMOVED")
+    return
+```
+
+2. **Configured ID protection:**
+```python
+# From jackett_bot/handlers/commands.py:230-237
+if self.auth_service.is_configured_id_authorized(target_id):
+    await message.reply_text(
+        (
+            f"{self._format_key_value('ERROR', 'ID IS AUTHORIZED FROM CONFIG')}\n"
+            "<b><u>ACTION:</u></b> <code>REMOVE FROM AUTHORIZED_CHAT_IDS AND RESTART</code>"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    return
+```
+
+### Bulk Revocation
+
+**Via `/unauthall` command:**
+
+```
+/unauthall
+```
+
+Clears all temporary authorizations at once. Useful for:
+- Security incidents
+- Access resets
+- Cleanup after testing
+
+**Response:**
+```
+TEMP IDS REMOVED: 5
+```
+
+---
+
+## Security Considerations
+
+### Best Practices
+
+<Warning>
+Follow these security practices:
+
+1. **Protect your config.env file** - Contains sensitive API keys
+2. **Use strong OWNER_ID** - Ensure only you have owner access
+3. **Minimize AUTHORIZED_CHAT_IDS** - Only add trusted users/chats
+4. **Review temporary authorizations** - Audit who has access
+5. **Restart after config changes** - Authorization updates require restart
+</Warning>
+
+### Access Control Patterns
+
+<Accordion title="Owner-Only (Strictest)">
+
+**Configuration:**
+```env
+OWNER_ID=123456789
+AUTHORIZED_CHAT_IDS=
+```
+
+**Result:**
+- Only owner can use bot
+- Owner can grant temporary access as needed
+- Maximum security
+
+</Accordion>
+
+<Accordion title="Trusted Users">
+
+**Configuration:**
+```env
+OWNER_ID=123456789
+AUTHORIZED_CHAT_IDS=111111111,222222222,333333333
+```
+
+**Result:**
+- Owner + 3 trusted users
+- Users can use bot anywhere
+- Owner can add temporary users
+
+</Accordion>
+
+<Accordion title="Private Group">
+
+**Configuration:**
+```env
+OWNER_ID=123456789
+AUTHORIZED_CHAT_IDS=-987654321
+```
+
+**Result:**
+- Only works in group `-987654321`
+- Any group member can use bot
+- Bot won't work in other chats (except for owner)
+
+</Accordion>
+
+<Accordion title="Mixed (Flexible)">
+
+**Configuration:**
+```env
+OWNER_ID=123456789
+AUTHORIZED_CHAT_IDS=111111111,-987654321
+```
+
+**Result:**
+- Owner everywhere
+- User `111111111` everywhere
+- Group `-987654321` members in that group only
+
+</Accordion>
+
+### Authorization Errors
+
+**Unauthorized access attempt:**
+```
+ERROR: NOT AUTHORIZED
+```
+
+**Non-owner attempting owner command:**
+```
+ERROR: ONLY OWNER CAN USE /AUTH
+```
+
+**Owner removal attempt:**
+```
+ERROR: OWNER CANNOT BE REMOVED
+```
+
+**Config ID removal attempt:**
+```
+ERROR: ID IS AUTHORIZED FROM CONFIG
+ACTION: REMOVE FROM AUTHORIZED_CHAT_IDS AND RESTART
+```
+
+---
+
+## Troubleshooting
+
+### Bot Not Responding
+
+**Check authorization:**
+1. Run `/start` command
+2. If you see `ERROR: NOT AUTHORIZED`, you're not authorized
+3. Contact the bot owner to grant access
+
+### Cannot Remove Authorization
+
+**Symptom:** `/unauth` says ID is from config
+
+**Solution:**
+1. Edit `config.env`
+2. Remove ID from `AUTHORIZED_CHAT_IDS`
+3. Restart the bot
+
+### Lost Owner Access
+
+**Prevention:** Always keep your `OWNER_ID` safe
+
+**Recovery:**
+1. Stop the bot
+2. Edit `config.env`
+3. Correct `OWNER_ID`
+4. Restart the bot
+
+### Temporary Authorization Lost After Restart
+
+**This is expected behavior.** Temporary authorizations are not persisted.
+
+**Solution:**
+- Use `AUTHORIZED_CHAT_IDS` for permanent access
+- Or re-authorize after restart using `/auth`
+
+---
+
+## Advanced Topics
+
+### ID Normalization
+
+All IDs are normalized before comparison:
+
+```python
+# From jackett_bot/services/auth.py:62-64
+@staticmethod
+def _normalize_id(entity_id: int) -> int:
+    return int(entity_id)
+```
+
+This ensures consistent ID handling across the system.
+
+### Bootstrap Authorizations
+
+Configured IDs are loaded at startup:
+
+```python
+# From jackett_bot/services/auth.py:57-60
+def bootstrap_authorizations(self, entity_ids: Iterable[int]):
+    normalized_ids = {self._normalize_id(entity_id) for entity_id in entity_ids}
+    with self._lock:
+        self._configured_ids.update(normalized_ids)
+```
+
+**Called from:**
+```python
+# From jackett_bot/app.py:23-25
+self.auth_service = AuthorizationService(
+    bootstrap_ids=self.config.authorized_chat_ids,
+)
+```
+
+### Listing Authorizations
+
+The service provides methods to list authorized IDs:
+
+```python
+# Get configured IDs
+config_ids = auth_service.list_configured_ids()
+
+# Get temporary IDs  
+temp_ids = auth_service.list_temporary_ids()
+```
+
+**Note:** These methods are not exposed via commands but can be used programmatically.

@@ -1,0 +1,356 @@
+---
+title: Configuration
+description: Complete guide to configuring JackettSearchBot with all environment variables
+---
+
+## Configuration File
+
+JackettSearchBot uses a `config.env` file for all configuration. Create it from the provided template:
+
+```bash
+cp config.env.example config.env
+```
+
+Then edit `config.env` with your actual values.
+
+<Warning>
+  Never commit `config.env` to version control. Keep your tokens and API keys secure. The file is already included in `.gitignore`.
+</Warning>
+
+## Configuration Overview
+
+The bot configuration is loaded from `config.env` on startup and validated by the `BotConfig` class in `jackett_bot/config.py`. Missing required values will cause the bot to exit with a clear error message.
+
+## Environment Variables
+
+### Telegram Bot Configuration
+
+These variables configure the Telegram bot connection:
+
+<ParamField path="TELEGRAM_TOKEN" type="string" required>
+  Your Telegram bot token from [@BotFather](https://t.me/botfather).
+  
+  **Example:** `1234567890:ABCdefGHIjklMNOpqrsTUVwxyz`
+  
+  **How to obtain:**
+  1. Message [@BotFather](https://t.me/botfather) on Telegram
+  2. Send `/newbot` and follow the instructions
+  3. Copy the token provided
+</ParamField>
+
+<ParamField path="API_ID" type="integer" required>
+  Your Telegram API ID from [my.telegram.org](https://my.telegram.org).
+  
+  **Example:** `123456`
+  
+  **How to obtain:**
+  1. Go to [my.telegram.org](https://my.telegram.org)
+  2. Log in with your phone number
+  3. Navigate to "API development tools"
+  4. Create an application if you haven't already
+  5. Copy the `api_id` value
+</ParamField>
+
+<ParamField path="API_HASH" type="string" required>
+  Your Telegram API hash from [my.telegram.org](https://my.telegram.org).
+  
+  **Example:** `abcdef1234567890abcdef1234567890`
+  
+  **How to obtain:** Same process as API_ID above, copy the `api_hash` value.
+</ParamField>
+
+### Jackett Configuration
+
+These variables connect the bot to your Jackett instance:
+
+<ParamField path="JACKETT_API_KEY" type="string" required>
+  Your Jackett API key for authentication.
+  
+  **Example:** `abcdefghijklmnopqrstuvwxyz123456`
+  
+  **How to obtain:**
+  1. Open your Jackett web interface
+  2. The API key is displayed at the top of the dashboard
+  3. Click the copy icon to copy it
+</ParamField>
+
+<ParamField path="JACKETT_URL" type="string" required>
+  The base URL where your Jackett instance is running.
+  
+  **Example:** `http://localhost:9117`
+  
+  **Notes:**
+  - Include the protocol (`http://` or `https://`)
+  - Do not include a trailing slash
+  - If Jackett is on another machine, use that machine's IP or hostname
+  - Ensure the bot can reach this URL from its host
+</ParamField>
+
+### Authorization
+
+Control who can use the bot:
+
+<ParamField path="AUTHORIZED_CHAT_IDS" type="string" default="">
+  Comma-separated list of Telegram chat IDs that are permanently authorized to use the bot.
+  
+  **Example:** `123456789,987654321,555555555`
+  
+  **Notes:**
+  - Optional - can be left empty
+  - These IDs are loaded on startup and persist across restarts
+  - Chat IDs can be for individual users or group chats
+  - To find your chat ID, use bots like [@userinfobot](https://t.me/userinfobot)
+  - The owner (OWNER_ID) is always authorized regardless of this list
+  
+  **Format:** Parse function from `config.py:111-121`
+  ```python
+  def _parse_authorized_chat_ids(raw_chat_ids: str) -> list[int]:
+      chat_ids: list[int] = []
+      for chat_id in raw_chat_ids.split(","):
+          trimmed = chat_id.strip()
+          if not trimmed:
+              continue
+          try:
+              chat_ids.append(int(trimmed))
+          except ValueError as exc:
+              raise ValueError(f"Invalid chat id in AUTHORIZED_CHAT_IDS: {trimmed!r}") from exc
+      return chat_ids
+  ```
+</ParamField>
+
+<ParamField path="OWNER_ID" type="integer" required>
+  The Telegram user ID of the bot owner. This user has full access and can manage authorizations.
+  
+  **Example:** `123456789`
+  
+  **Notes:**
+  - Must be a valid Telegram user ID (positive integer)
+  - The owner can use `/auth` and `/unauth` commands
+  - The owner has access even if not in AUTHORIZED_CHAT_IDS
+  - To find your user ID, use bots like [@userinfobot](https://t.me/userinfobot)
+</ParamField>
+
+### Bot Behavior
+
+Customize how the bot behaves:
+
+<ParamField path="MAX_RESULTS" type="integer" default="10">
+  Maximum number of results to display per page in search results.
+  
+  **Example:** `10`
+  
+  **Notes:**
+  - Must be a positive integer
+  - Higher values show more results per page but create longer messages
+  - Recommended range: 5-20
+  - Used in pagination for the `/release` command
+</ParamField>
+
+<ParamField path="REDACT_AFTER_SECONDS" type="integer" default="300">
+  Number of seconds before search results are automatically redacted (hidden).
+  
+  **Example:** `300` (5 minutes)
+  
+  **Notes:**
+  - Must be at least 1
+  - Helps keep sensitive search results from staying visible indefinitely
+  - Set to a higher value if you want results to stay visible longer
+  - After redaction, the message content is replaced with a notice
+  
+  **Validation:** From `config.py:86-90`
+  ```python
+  def _parse_positive_int_env(key: str, default: int) -> int:
+      value = _parse_int_env(key, default=default)
+      if value < 1:
+          raise ValueError(f"Environment variable {key} must be >= 1, got: {value}")
+      return value
+  ```
+</ParamField>
+
+### Logging
+
+Configure logging behavior:
+
+<ParamField path="LOG_FILE_PATH" type="string" default="logs/jackett_bot.log">
+  Path where log files are written.
+  
+  **Example:** `logs/jackett_bot.log`
+  
+  **Notes:**
+  - Can be relative or absolute path
+  - Parent directories are created automatically if they don't exist
+  - Uses rotating file handler (10MB per file, 5 backup files)
+  - Total log storage: up to 60MB (6 files × 10MB)
+</ParamField>
+
+<ParamField path="CONSOLE_LOG_LEVEL" type="string" default="INFO">
+  Log level for console (stdout) output.
+  
+  **Example:** `INFO`
+  
+  **Valid values:** `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
+  
+  **Notes:**
+  - Case-insensitive
+  - `INFO` is recommended for production
+  - `DEBUG` shows very detailed information, useful for troubleshooting
+  - `WARNING` or higher reduces console noise
+</ParamField>
+
+<ParamField path="FILE_LOG_LEVEL" type="string" default="DEBUG">
+  Log level for file output.
+  
+  **Example:** `DEBUG`
+  
+  **Valid values:** `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
+  
+  **Notes:**
+  - Case-insensitive
+  - `DEBUG` is recommended for file logs to aid in troubleshooting
+  - File logs include more context (filename, line number, function name)
+  - Does not impact performance significantly due to async I/O
+  
+  **Log format:** From `app.py:143-146`
+  ```python
+  "%(asctime)s | %(levelname)s | %(name)s | "
+  "%(filename)s:%(lineno)d | %(funcName)s | %(message)s"
+  ```
+</ParamField>
+
+## Complete Example Configuration
+
+Here's a complete `config.env` file with all variables:
+
+```env
+# Telegram Bot Configuration
+TELEGRAM_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
+API_ID=123456
+API_HASH=abcdef1234567890abcdef1234567890
+
+# Jackett Configuration
+JACKETT_API_KEY=abcdefghijklmnopqrstuvwxyz123456
+JACKETT_URL=http://localhost:9117
+
+# Authorization
+AUTHORIZED_CHAT_IDS=123456789,987654321
+OWNER_ID=123456789
+
+# Bot Behavior
+MAX_RESULTS=10
+REDACT_AFTER_SECONDS=300
+
+# Logging
+LOG_FILE_PATH=logs/jackett_bot.log
+CONSOLE_LOG_LEVEL=INFO
+FILE_LOG_LEVEL=DEBUG
+```
+
+## Configuration Validation
+
+The bot validates all configuration on startup using the `BotConfig` class. If any issues are found, the bot will exit with a clear error message.
+
+### Validation Rules
+
+From `config.py:53-60`:
+
+```python
+def _validate_required_env(keys: list[str]):
+    missing_keys = [key for key in keys if os.getenv(key) is None or not os.getenv(key, "").strip()]
+    if missing_keys:
+        missing_list = ", ".join(missing_keys)
+        raise ValueError(
+            "Missing required config values: "
+            f"{missing_list}. Fill them in config.env before starting the bot."
+        )
+```
+
+**Required variables checked:**
+- `TELEGRAM_TOKEN`
+- `API_ID`
+- `API_HASH`
+- `JACKETT_API_KEY`
+- `JACKETT_URL`
+- `OWNER_ID`
+
+### Error Handling
+
+From `main.py:4-9`, configuration errors are caught on startup:
+
+```python
+try:
+    bot = JackettSearchBot.initialize("config.env")
+except ValueError as exc:
+    print(f"Initialization failed: {exc}")
+    print("Please fill the missing values in config.env and start again.")
+    raise SystemExit(1) from exc
+```
+
+## Security Best Practices
+
+<Warning>
+  Follow these security practices to keep your bot secure:
+</Warning>
+
+- **Never commit secrets** - Keep `config.env` out of version control
+- **Restrict file permissions** - Set `config.env` to be readable only by the bot user
+  ```bash
+  chmod 600 config.env
+  ```
+- **Rotate credentials immediately** if they are ever exposed
+- **Use HTTPS for Jackett** when possible, especially over public networks
+- **Limit authorized users** - Only add trusted chat IDs to AUTHORIZED_CHAT_IDS
+- **Monitor logs** - Regularly check logs for suspicious activity
+- **Keep dependencies updated** - Run `uv sync` periodically to get security updates
+
+## Testing Configuration
+
+After configuring, test that the bot can start successfully:
+
+```bash
+uv run python main.py
+```
+
+You should see log output indicating successful initialization:
+
+```
+2026-03-03 12:00:00 | INFO | JackettSearchBot | JackettSearchBot initialized.
+2026-03-03 12:00:00 | INFO | JackettSearchBot | Logging configured | console=INFO | file=DEBUG | path=/path/to/logs/jackett_bot.log
+2026-03-03 12:00:00 | INFO | JackettSearchBot | Initialization complete. Configuration is valid.
+2026-03-03 12:00:00 | INFO | JackettSearchBot | Starting bot runtime.
+```
+
+## Troubleshooting
+
+### Missing Required Variables
+
+If you see an error like:
+```
+Missing required config values: TELEGRAM_TOKEN, JACKETT_API_KEY. Fill them in config.env before starting the bot.
+```
+
+Ensure all required variables are set in `config.env` with valid values (not empty or placeholder text).
+
+### Invalid Integer Values
+
+If you see:
+```
+Environment variable API_ID must be an integer, got: 'abc123'
+```
+
+Check that numeric fields like `API_ID`, `OWNER_ID`, and `MAX_RESULTS` contain only numbers.
+
+### Invalid Log Level
+
+If you see:
+```
+Invalid log level for CONSOLE_LOG_LEVEL: 'TRACE'. Use DEBUG, INFO, WARNING, ERROR, or CRITICAL.
+```
+
+Use one of the valid Python logging levels.
+
+## Next Steps
+
+Once configured, you're ready to:
+
+- [Run the Bot](/setup/running) - Start and manage your bot
+- [Learn Commands](/usage/commands) - Understand available bot commands
