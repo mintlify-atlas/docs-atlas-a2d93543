@@ -1,0 +1,62 @@
+{
+  "projectType": "general",
+  "projectName": "JackettSearchBot",
+  "projectDescription": "Telegram bot for searching Jackett releases with pagination and PTP availability checking",
+  "theme": "aspen",
+  "primaryColor": "#0088cc",
+  "lightColor": "#54a9eb",
+  "darkColor": "#0078b8",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get Started",
+        "pages": [
+          "introduction",
+          "quickstart"
+        ]
+      },
+      {
+        "group": "Setup",
+        "pages": [
+          "setup/installation",
+          "setup/configuration",
+          "setup/running"
+        ]
+      },
+      {
+        "group": "Usage",
+        "pages": [
+          "usage/commands",
+          "usage/search",
+          "usage/authorization"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/project-structure",
+          "reference/services",
+          "reference/best-practices"
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Search Jackett releases via Telegram commands",
+    "In-chat pagination for search results",
+    "Golden Popcorn filtering",
+    "PTP availability checking",
+    "Authorization and access control",
+    "Automatic result redaction"
+  ],
+  "publicApiSurface": [
+    "/start - Verify bot access",
+    "/help - Show command list",
+    "/release <query> - Search releases",
+    "/r <query> - Search releases (alias)",
+    "/check - Check PTP availability",
+    "/auth [id] - Authorize user/chat (owner only)",
+    "/unauth [id] - Remove authorization (owner only)",
+    "/unauthall - Clear all temporary authorizations (owner only)"
+  ]
+}
